@@ -2,9 +2,9 @@
 
 namespace
 {
-    float fA = 0, fR = 0, sA = 0, sR = 0;   // onset follower coefficients (set in prepare)
     constexpr double kBufferSeconds = 12.0;
-    constexpr double kLayerSeconds  = 2.5;
+    constexpr double kLayerSeconds  = 2.6;
+    constexpr int    kGuard         = 4;     // samples kept between read and write heads
 }
 
 void GranularEngine::prepare (double sampleRate, int)
@@ -13,19 +13,15 @@ void GranularEngine::prepare (double sampleRate, int)
     bufLen = (int) (kBufferSeconds * sr);
     bufL.assign ((size_t) bufLen, 0.0f);
     bufR.assign ((size_t) bufLen, 0.0f);
-
     for (auto& l : layers)
     {
         l.L.assign ((size_t) (kLayerSeconds * sr), 0.0f);
         l.R.assign ((size_t) (kLayerSeconds * sr), 0.0f);
     }
-
     fA = 1.0f - std::exp (-1.0f / (0.0008f * (float) sr));
     fR = 1.0f - std::exp (-1.0f / (0.020f  * (float) sr));
     sA = 1.0f - std::exp (-1.0f / (0.050f  * (float) sr));
     sR = 1.0f - std::exp (-1.0f / (0.350f  * (float) sr));
-    fbLpCoef = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 10000.0f / (float) sr);
-    fbHpCoef = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 70.0f / (float) sr);
     reset();
 }
 
@@ -42,102 +38,202 @@ void GranularEngine::reset()
     }
     afRecording = afHasSegment = false;
     envFast = envSlow = 0; holdOff = 0; noiseFloor = 0.001f;
-    spawnCounter = 0;
-    fbPrevL = fbPrevR = 0;
-    fbEnv = 0;
-    particleCounter = 0; haveLast = false; wowPhase = 0;
+    spawnCounter = particleCounter = 0;
+    fbPrevL = fbPrevR = fbEnv = 0;
     fbLpL = fbLpR = fbHpL = fbHpR = 0;
+    wowPhase = 0; haveLast = false;
     writePos = 0;
     frozen = false;
     layersActive = 0;
 }
 
-float GranularEngine::grainRatio (const EngineParams& p)
+GranularEngine::Grain* GranularEngine::freeGrain()
+{
+    for (auto& g : grains) if (! g.active) return &g;
+    return nullptr;
+}
+
+float GranularEngine::effectiveDensity (const EngineParams& p) const
+{
+    // OVERLAP: 1..30 grains; never below 1.25 so successive grains always cross-fade
+    return juce::jmax (1.25f, Map::overlapCount (p.overlap));
+}
+
+float GranularEngine::grainSemis (const EngineParams& p)
 {
     float semis = Map::pitchSemis (p.pitch);
     if (p.quantize) semis = Map::quantiseSemis (semis);
 
-    // PITCH RANDOM, first third: unison detune (supersaw-like synth thickness, up to +/-30 cents)
+    // PITCH RANDOM, first third: unison detune (up to +/-30 cents) - lush, chorus-like synth
     const float detune = juce::jmin (p.pitchRnd, 0.33f) / 0.33f;
     semis += brnd() * 0.30f * detune;
     // beyond: grains jump more and more often to harmonically related intervals
     const float jump = juce::jmax (0.0f, (p.pitchRnd - 0.33f) / 0.67f);
-    if (jump > 0.001f && rnd() < jump * 0.85f)
+    if (jump > 0.001f && rnd() < jump * 0.8f)
     {
-        static const float intervals[] = { 12, -12, 7, -5, 19, 24, -24 };
+        static const float intervals[] = { 12, -12, 7, 19, -5, 24, 5 };
         const int count = juce::jlimit (2, 7, 2 + (int) (jump * 5.99f));
         semis += intervals[(int) (rnd() * (float) count) % count];
     }
-    semis = juce::jlimit (-36.0f, 36.0f, semis);
-    return std::exp2 (semis / 12.0f);
+    return juce::jlimit (-36.0f, 36.0f, semis);
 }
 
-void GranularEngine::spawnGrain (const EngineParams& p, int source, double sourceEnd, float jitter, float density)
+//------------------------------------------------------------------------------
+// WSOLA-style phase alignment: shift the new grain (within +/-12 ms) so that its
+// fade-in matches the waveform of the grain it cross-fades with. Without it two
+// grains of the same note can cancel during the cross-fade (audible drop-outs),
+// especially in reverse. Returns the best shift (in source samples).
+double GranularEngine::alignToPrevious (const Grain& fresh, int fadeLen, double minShift, double maxShift, float& corrOut)
 {
-    Grain* g = nullptr;
-    for (auto& cand : grains) if (! cand.active) { g = &cand; break; }
+    corrOut = 0.0f;
+    // reference = what the grains already sounding will output during the fade-in
+    int n = fadeLen;
+    bool any = false;
+    for (auto& g : grains)
+        if (g.active && &g != &fresh && g.source == fresh.source && g.amp >= 1.0f)
+        { any = true; n = juce::jmin (n, juce::jmax (fadeLen / 2, g.length - g.age)); }
+    if (! any || n < 64) return 0.0;
+
+    const float* bL = fresh.source < 0 ? bufL.data() : layers[(size_t) fresh.source].L.data();
+    const int    bl = fresh.source < 0 ? bufLen      : (int) layers[(size_t) fresh.source].L.size();
+
+    const int step = juce::jmax (3, n / 256);
+    float ref[256], wnew[256];
+    const int m = juce::jmin (256, n / step);
+    for (int k = 0; k < m; ++k) { ref[k] = 0.0f; wnew[k] = window ((float) (k * step) / (float) fresh.length, fresh.taper, false); }
+    for (auto& g : grains)
+    {
+        if (! g.active || &g == &fresh || g.source != fresh.source || g.amp < 1.0f) continue;
+        for (int k = 0; k < m; ++k)
+        {
+            const int age = g.age + k * step;
+            if (age >= g.length) break;
+            ref[k] += window ((float) age / (float) g.length, g.taper, false)
+                      * hermite (bL, bl, g.pos + g.inc * (double) (k * step));
+        }
+    }
+    double refE = 0;
+    for (int k = 0; k < m; ++k) refE += ref[k] * ref[k];
+    if (refE < 1.0e-7) return 0.0;
+
+    double best = 0.0; double bestC = -2.0;
+    auto score = [&] (double sh)
+    {
+        double c = 0, e = 0;
+        for (int k = 0; k < m; ++k)
+        {
+            const float v = wnew[k] * hermite (bL, bl, fresh.pos + sh + fresh.inc * (double) (k * step));
+            c += v * ref[k]; e += v * v;
+        }
+        return e < 1.0e-9 ? -2.0 : c / std::sqrt (e * refE);
+    };
+    // coarse search, then refine around the best match
+    const double coarse = juce::jmax (1.0, std::abs (fresh.inc)) * 4.0;
+    for (double sh = minShift; sh <= maxShift; sh += coarse)
+    {
+        const double nc = score (sh);
+        if (nc > bestC) { bestC = nc; best = sh; }
+    }
+    const double fine = juce::jmax (1.0, std::abs (fresh.inc));
+    const double c0 = best;
+    for (double sh = juce::jmax (minShift, c0 - coarse); sh <= juce::jmin (maxShift, c0 + coarse); sh += fine * 0.5)
+    {
+        const double nc = score (sh);
+        if (nc > bestC) { bestC = nc; best = sh; }
+    }
+    corrOut = (float) bestC;
+    return best;
+}
+
+//------------------------------------------------------------------------------
+// regionStart..regionEnd : readable audio (absolute positions, may exceed bufLen;
+//                          hermite wraps). anchor = preferred grain end.
+// scatter                : 0..1 random spread of the grain position in the region.
+void GranularEngine::spawnGrain (const EngineParams& p, int source, double regionStart, double regionEnd,
+                                 double anchor, float scatter)
+{
+    Grain* g = freeGrain();
     if (g == nullptr) return;
 
+    const float density = effectiveDensity (p);
     const float sizeSec = Map::sizeSeconds (p.size, p.mode);
-    const float lenS    = sizeSec * (float) sr * (1.0f + p.sizeRnd * brnd() * 0.85f);
-    const int   len     = juce::jmax (64, (int) lenS);
-    const float rate    = grainRatio (p);
-    const double span   = (double) len * rate;
+    int len = juce::jmax (96, (int) (sizeSec * (float) sr * (1.0f + p.sizeRnd * brnd() * 0.85f)));
+    float rate = std::exp2 (grainSemis (p) / 12.0f);
+    if (source >= 0) rate *= std::exp2 (layers[(size_t) source].drift / 1200.0f);
 
-    double end   = sourceEnd - (double) (rnd() * jitter);
+    double span = (double) len * rate;
+    const double regionLen = regionEnd - regionStart;
+    if (span > regionLen && regionLen > 256.0)          // keep the grain inside readable audio
+    {
+        len  = juce::jmax (96, (int) (regionLen / rate));
+        span = (double) len * rate;
+    }
+
+    double end = anchor - (double) (rnd() * scatter) * juce::jmax (0.0, regionLen - span);
+    end = juce::jlimit (regionStart + span, regionEnd, end);
     double start = end - span;
-    int    glen  = len;
-    float  grate = rate;
-    // GLITCH: high TIME RANDOM makes some grains re-fire the previous slice (stutter / repeat)
-    if (source < 0 && haveLast && p.timeRnd > 0.45f && rnd() < (p.timeRnd - 0.45f) * 0.9f)
+
+    // GLITCH: high TIME RANDOM makes some grains re-fire the previous slice (stutter)
+    if (source < 0 && haveLast && p.timeRnd > 0.45f && rnd() < (p.timeRnd - 0.45f) * 0.9f
+        && lastStart >= regionStart && lastStart + (double) lastLen * lastRate <= regionEnd)
     {
         start = lastStart;
-        glen  = juce::jmax (64, (int) ((float) lastLen * (rnd() < 0.5f ? 0.5f : 1.0f)));
-        grate = lastRate;
-        end   = start + (double) glen * grate;
+        len   = juce::jmax (96, (int) ((float) lastLen * (rnd() < 0.5f ? 0.5f : 1.0f)));
+        rate  = lastRate;
+        end   = start + (double) len * rate;
     }
-    if (source >= 0)                     // layer buffers: keep the grain inside the recorded note
+    lastStart = start; lastLen = len; lastRate = rate; haveLast = source < 0;
+
+    const bool rev = p.reverse && rnd() < Map::reverseProbability (p.reverseRnd);
+
+    g->active       = true;
+    g->source       = source;
+    g->length       = len;
+    g->age          = 0;
+    g->inc          = rev ? -rate : rate;
+    g->pos          = rev ? end : start;
+    g->taper        = juce::jlimit (0.2f, 0.5f, 1.0f - 1.0f / density);
+    g->equalPower   = rev;
+    g->amp          = 1.0f;
+
+    // sparse clouds (where each cross-fade is audible): align the new grain's phase
+    if (density < 4.5f)
     {
-        const double lim = (double) layers[(size_t) source].length;
-        const double sp = (double) glen * grate;
-        if (start < 0.0) { start = 0.0; end = sp; }
-        if (end > lim)   { end = lim; start = juce::jmax (0.0, lim - sp); }
+        const int fadeLen = (int) ((float) len * g->taper);
+        const double maxS = 0.012 * sr;
+        // keep the grain inside the readable region whatever the shift
+        const double lo = rev ? juce::jmax (-maxS, (regionStart + span) - end) : juce::jmax (-maxS, regionStart - start);
+        const double hi = rev ? juce::jmin ( maxS, regionEnd - end)            : juce::jmin ( maxS, regionEnd - end);
+        if (hi > lo)
+        {
+            float corr = 0.0f;
+            const double sh = alignToPrevious (*g, fadeLen, lo, hi, corr);
+            g->pos += sh;
+            g->equalPower = corr < 0.5f;     // well aligned -> amplitude-complementary fade
+        }
     }
-    lastStart = start; lastLen = glen; lastRate = grate; haveLast = source < 0;
-    const bool   rev   = p.reverse && rnd() < Map::reverseProbability (p.reverseRnd);
+    g->stereoOffset = p.stereo ? (double) (rnd() * 0.003f * (float) sr) : 0.0;   // only further in the past
 
-    g->active = true;
-    g->source = source;
-    g->length = glen;
-    g->age    = 0;
-    g->inc    = rev ? -grate : grate;
-    g->pos    = rev ? end : start;
-    g->amp    = 1.0f;
-
-    const float norm = 1.0f / std::pow (juce::jmax (1.0f, 0.75f * density), 0.75f);
     if (p.stereo)
     {
-        const float pan = brnd() * 0.9f;                       // random panning across the field
+        const float pan = brnd() * 0.85f;
         const float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-        g->gL = norm * std::cos (a) * 1.41421356f;
-        g->gR = norm * std::sin (a) * 1.41421356f;
+        g->gL = std::cos (a) * 1.41421356f;
+        g->gR = std::sin (a) * 1.41421356f;
     }
-    else
-    {
-        g->gL = g->gR = norm;
-    }
+    else g->gL = g->gR = 1.0f;
 }
 
-// MIX above 60 % sprays a cloud of tiny "particle" grains (10-45 ms), scattered in time,
-// randomly panned and sometimes thrown up an octave or a twelfth: granular dust and sparkle.
+// MIX above 60 %: a cloud of tiny "particle" grains (10-45 ms) scattered in time
+// and across the stereo field; sparkle (octave/twelfth) follows PITCH RANDOM,
+// direction follows REVERSE.
 void GranularEngine::spawnParticle (const EngineParams& p)
 {
-    Grain* g = nullptr;
-    for (auto& cand : grains) if (! cand.active) { g = &cand; break; }
+    Grain* g = freeGrain();
     if (g == nullptr) return;
 
     int source = -1;
-    double end;
+    double lo, hi;
     if (p.mode == Mode::Layers)
     {
         int cand[kLayers], n = 0;
@@ -145,20 +241,26 @@ void GranularEngine::spawnParticle (const EngineParams& p)
             if (layers[(size_t) i].stage != Layer::Off && layers[(size_t) i].length > 0) cand[n++] = i;
         if (n == 0) return;
         source = cand[(int) (rnd() * (float) n) % n];
-        end = (double) layers[(size_t) source].length * (0.2 + 0.8 * rnd());
+        lo = 0; hi = (double) layers[(size_t) source].length;
     }
     else if (p.mode == Mode::AutoFreeze && afHasSegment)
-        end = (double) afSegStart + (double) afSegLen * (0.15 + 0.85 * rnd());
+    {
+        lo = afSegStart; hi = (double) afSegStart + afSegLen;
+    }
     else
-        end = (double) writePos - sr * (0.02 + 1.6 * rnd());
+    {
+        hi = (double) writePos - kGuard; lo = hi - 1.6 * sr;
+    }
 
     const int len = (int) ((0.010f + 0.035f * rnd()) * (float) sr);
     float semis = Map::pitchSemis (p.pitch);
     if (p.quantize) semis = Map::quantiseSemis (semis);
-    // sparkle (octave / twelfth) follows PITCH RANDOM, direction follows REVERSE
     const float r = rnd() / juce::jmax (0.001f, juce::jmin (1.0f, p.pitchRnd * 3.0f));
     if (r < 0.30f) semis += 12.0f; else if (r < 0.42f) semis += 19.0f; else if (r < 0.48f) semis += 24.0f;
-    const float rate = std::exp2 (juce::jlimit (-36.0f, 36.0f, semis) / 12.0f);
+    const double rate = std::exp2 (juce::jlimit (-36.0f, 36.0f, semis) / 12.0f);
+    const double span = (double) len * rate;
+    if (hi - lo < span + 8) return;
+    const double end = lo + span + (double) rnd() * (hi - lo - span);
     const bool rev = p.reverse ? rnd() < Map::reverseProbability (p.reverseRnd) : rnd() < 0.2f;
 
     g->active = true;
@@ -166,12 +268,15 @@ void GranularEngine::spawnParticle (const EngineParams& p)
     g->length = len;
     g->age    = 0;
     g->inc    = rev ? -rate : rate;
-    g->pos    = rev ? end : end - (double) len * rate;
+    g->pos    = rev ? end : end - span;
+    g->taper  = 0.5f;
+    g->equalPower = false;
+    g->stereoOffset = 0;
     const float pan = brnd();
     const float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
     g->gL = std::cos (a) * 1.41421356f;
     g->gR = std::sin (a) * 1.41421356f;
-    g->amp = 0.42f;
+    g->amp = 0.5f;
 }
 
 bool GranularEngine::detectOnset (float x)
@@ -179,9 +284,8 @@ bool GranularEngine::detectOnset (float x)
     const float a = std::abs (x);
     envFast += (a > envFast ? fA : fR) * (a - envFast);
     envSlow += (a > envSlow ? sA : sR) * (a - envSlow);
-    if (holdOff > 0) { --holdOff; return false; }
-    // adaptive note/chord detector: a clear rise above the recent level and the noise floor
     noiseFloor += (envSlow < noiseFloor ? 0.002f : 0.000002f) * (envSlow - noiseFloor);
+    if (holdOff > 0) { --holdOff; return false; }
     if (envFast > juce::jmax (0.0025f, noiseFloor * 4.0f) && envFast > envSlow * 1.7f + 0.0006f)
     {
         holdOff = (int) (holdSeconds * sr);
@@ -201,15 +305,12 @@ void GranularEngine::onsetDetected (const EngineParams& p)
     }
     else if (p.mode == Mode::Layers)
     {
-        if (p.freeze) return;                      // frozen layers ignore new notes
-
+        if (p.freeze) return;
         Layer* slot = nullptr;
         for (auto& l : layers) if (l.stage == Layer::Off && ! l.recording) { slot = &l; break; }
         if (slot == nullptr)
-        {
-            for (auto& l : layers)                 // replace the oldest of the four
+            for (auto& l : layers)
                 if (! l.recording && (slot == nullptr || l.order < slot->order)) slot = &l;
-        }
         if (slot == nullptr) return;
 
         if (slot->stage != Layer::Off) slot->stage = Layer::Release;
@@ -217,19 +318,21 @@ void GranularEngine::onsetDetected (const EngineParams& p)
         slot->recording = true;
         slot->recStart  = writePos - (int) (0.002 * sr);
         slot->recCount  = 0;
-        slot->recLen    = (int) (juce::jlimit (0.6f, 2.4f, 0.45f + sizeSec * 3.0f) * sr);
+        slot->recLen    = (int) (juce::jlimit (0.6f, 2.5f, 0.45f + sizeSec * 3.0f) * sr);
         slot->order     = ++layerCounter;
+        slot->drift     = brnd() * 6.0f;                    // +/- 6 cents per voice
     }
 }
 
-void GranularEngine::process (const float* inLp, const float* inRp, float* wetL, float* wetR,
-                              int numSamples, const EngineParams& p)
+//==============================================================================
+void GranularEngine::process (const float* inLp, const float* inRp, const float* recLp, const float* recRp,
+                              float* wetL, float* wetR, int numSamples, const EngineParams& p)
 {
     if (p.mode != lastMode)
     {
         afRecording = afHasSegment = false;
         for (auto& l : layers) { l.stage = Layer::Off; l.recording = false; l.env = 0; }
-        for (auto& g : grains) if (g.source >= 0) g.active = false;
+        for (auto& g : grains) g.active = false;
         lastMode = p.mode;
     }
 
@@ -238,24 +341,30 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
     const float fb           = p.mode == Mode::Layers ? 0.0f : Map::feedback (p.regen);
     const float fbDelay      = fb * (1.0f - p.regenMix);
     const float fbGrain      = fb * p.regenMix;
-    const float density      = Map::overlapCount (p.overlap);
-    const float fbComp       = std::pow (juce::jmax (1.0f, 0.75f * density), 0.35f);
+    const float density      = effectiveDensity (p);
     const float sizeSec      = Map::sizeSeconds (p.size, p.mode);
-    // repeats get darker (filter knob < noon, analog/tape echo) or thinner (> noon, lo-fi)
-    const float toneLP       = p.cutoff < 0.5f ? 1800.0f * std::pow (10000.0f / 1800.0f, p.cutoff / 0.5f) : 10000.0f;
-    const float toneHP       = p.cutoff > 0.5f ? 70.0f * std::pow (900.0f / 70.0f, (p.cutoff - 0.5f) / 0.5f) : 70.0f;
-    const float lpC          = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneLP / (float) sr);
-    const float hpC          = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneHP / (float) sr);
-    const float particles    = juce::jlimit (0.0f, 1.0f, (p.mix - 0.6f) / 0.4f);
     const bool  unfreezeHeld = p.mode == Mode::AutoFreeze && p.freeze;
 
-    const float attackInc    = 1.0f / (Map::timeSeconds (p.time, Mode::Layers) * (float) sr);
-    const float decayCoef    = std::exp (-6.9f / (Map::layerDecaySeconds (p.regen) * (float) sr));
-    const float releaseDec   = 1.0f / (0.025f * (float) sr);
+    // output normalisation for overlapping, mostly uncorrelated grains
+    const float taper   = juce::jlimit (0.2f, 0.5f, 1.0f - 1.0f / density);
+    const bool  sparse  = density < 4.5f && p.mode != Mode::Layers;
+    const float targetN = 1.0f / std::sqrt (juce::jmax (1.0f, density * (1.0f - taper) * 0.85f));
+    const float fbComp  = std::pow (juce::jmax (1.0f, density * (1.0f - taper)), 0.3f);
 
-    auto nextInterval = [&]
+    // repeats: darker below noon (analog echo), thinner above (lo-fi)
+    const float toneLP = p.cutoff < 0.5f ? 1500.0f * std::pow (7000.0f / 1500.0f, p.cutoff / 0.5f) : 7000.0f;   // sweet, non-piercing cascades
+    const float toneHP = p.cutoff > 0.5f ? 70.0f * std::pow (900.0f / 70.0f, (p.cutoff - 0.5f) / 0.5f) : 70.0f;
+    const float lpC = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneLP / (float) sr);
+    const float hpC = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneHP / (float) sr);
+    const float particles = juce::jlimit (0.0f, 1.0f, (p.mix - 0.6f) / 0.4f);
+
+    const float attackInc  = 1.0f / (Map::timeSeconds (p.time, Mode::Layers) * (float) sr);
+    const float decayCoef  = std::exp (-6.9f / (Map::layerDecaySeconds (p.regen) * (float) sr));
+    const float releaseDec = 1.0f / (0.030f * (float) sr);
+
+    auto nextInterval = [&] (double grainLen)
     {
-        const double base = p.tapSpacing > 0.0f ? p.tapSpacing * sr : sizeSec * sr / density;
+        const double base = p.tapSpacing > 0.0f ? p.tapSpacing * sr : grainLen / density;
         return juce::jmax (0.002 * sr, base * (1.0 + p.overlapRnd * brnd() * 0.9));
     };
 
@@ -263,38 +372,37 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
     {
         const float inL = p.inputMuted ? 0.0f : inLp[i];
         const float inR = p.inputMuted ? 0.0f : inRp[i];
+        const float rcL = p.inputMuted ? 0.0f : recLp[i];
+        const float rcR = p.inputMuted ? 0.0f : recRp[i];
 
         if (! p.inputMuted && detectOnset (0.5f * (inL + inR)))
             onsetDetected (p);
 
-        timeSmooth += 0.0005f * (timeTarget - timeSmooth);
+        timeSmooth += 0.0004f * (timeTarget - timeSmooth);
+        normGain   += 0.0005f * (targetN - normGain);
 
-        //---------------------------------------------------------------- write
+        //--------------------------------------------------------------- record
         bool writing = true;
         if (p.mode == Mode::Delay)           writing = ! p.freeze;
         else if (p.mode == Mode::AutoFreeze) writing = afRecording || unfreezeHeld || ! afHasSegment;
 
         if (writing)
         {
-            float wl = inL, wr = inR;
+            float wl = rcL, wr = rcR;
             if (p.mode != Mode::Layers && fb > 0.0f)
             {
-                // tape wow on the repeats follows the vibrato depth
                 wowPhase += 0.55f / (float) sr; if (wowPhase >= 1.0f) wowPhase -= 1.0f;
                 const double wow = (double) (p.vibDepth * 0.0025f * (float) sr
                                              * (0.5f + 0.5f * std::sin (juce::MathConstants<float>::twoPi * wowPhase)));
                 const double rp = (double) writePos - (double) timeSmooth * sr - wow;
                 float dl = hermite (bufL.data(), bufLen, rp);
                 float dr = hermite (bufR.data(), bufLen, rp);
-                if (p.stereo) std::swap (dl, dr);       // stereo output: repeats ping-pong L <-> R
+                if (p.stereo) std::swap (dl, dr);                        // ping-pong
                 float fl = fbDelay * dl + fbGrain * fbPrevL;
                 float fr = fbDelay * dr + fbGrain * fbPrevR;
-                // tone of the regeneration path: gentle high cut + DC/rumble blocker,
-                // so cascading octaves fade naturally like on hardware
                 fbLpL += lpC * (fl - fbLpL);  fbLpR += lpC * (fr - fbLpR);
                 fbHpL += hpC * (fbLpL - fbHpL); fbHpR += hpC * (fbLpR - fbHpR);
                 fl = fbLpL - fbHpL;  fr = fbLpR - fbHpR;
-                // feedback level control: lets REGEN self-sustain without running away
                 const float pk = juce::jmax (std::abs (fl), std::abs (fr));
                 fbEnv += (pk > fbEnv ? 0.004f : 0.00005f) * (pk - fbEnv);
                 const float fbg = fbEnv > 0.35f ? 0.35f / fbEnv : 1.0f;
@@ -306,6 +414,8 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
             if (++writePos >= bufLen) writePos = 0;
         }
 
+        const double head = (double) writePos;
+
         //---------------------------------------------------- Auto Freeze state
         if (afRecording && ++afRecCount >= afRecLen)
         {
@@ -315,22 +425,30 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
             afSegLen     = afRecLen;
         }
 
-        //--------------------------------------------------------- spawn grains
+        //------------------------------------------------------------ sow grains
         if (p.mode == Mode::Delay || unfreezeHeld)
         {
             if ((spawnCounter -= 1.0) <= 0.0)
             {
-                const double end = (double) writePos - timeSmooth * sr * (1.0 + 0.9 * p.timeRnd * brnd());
-                spawnGrain (p, -1, end, p.timeRnd * sizeSec * (float) sr * 0.5f, density);
-                spawnCounter = nextInterval();
+                // grain ends TIME behind the write head (randomised by TIME RANDOM);
+                // it only reads audio already recorded -> never crosses the head
+                const double regionEnd   = head - kGuard - 0.004 * sr;
+                const double regionStart = head - (double) bufLen + 0.1 * sr;
+                const double anchor      = regionEnd - (double) timeSmooth * sr * (1.0 + 0.9 * p.timeRnd * brnd());
+                spawnGrain (p, -1, regionStart, regionEnd, juce::jmin (anchor, regionEnd), 0.0f);
+                spawnCounter = nextInterval (sizeSec * sr);
             }
         }
         else if (p.mode == Mode::AutoFreeze && afHasSegment)
         {
             if ((spawnCounter -= 1.0) <= 0.0)
             {
-                spawnGrain (p, -1, (double) (afSegStart + afSegLen), (0.25f + 0.75f * p.timeRnd) * (float) afSegLen, density);
-                spawnCounter = nextInterval();
+                double s0 = (double) afSegStart, s1 = (double) afSegStart + afSegLen;
+                // short recordings: grains may look a little into older audio ("time travel")
+                const double needed = sizeSec * sr * 1.2;
+                if (s1 - s0 < needed) s0 = s1 - needed;
+                spawnGrain (p, -1, s0, s1, s1, 0.35f + 0.65f * p.timeRnd);
+                spawnCounter = nextInterval (sizeSec * sr);
             }
         }
         else if (p.mode == Mode::Layers)
@@ -338,7 +456,6 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
             for (int li = 0; li < kLayers; ++li)
             {
                 auto& l = layers[(size_t) li];
-
                 if (l.recording && ++l.recCount >= l.recLen)
                 {
                     for (auto& g : grains) if (g.source == li) g.active = false;
@@ -349,77 +466,69 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
                         l.L[(size_t) k] = bufL[(size_t) idx];
                         l.R[(size_t) k] = bufR[(size_t) idx];
                     }
-                    l.length = n;
-                    l.recording = false;
-                    l.stage = Layer::Attack;
-                    l.env = 0;
-                    l.spawnCounter = 0;
+                    l.length = n; l.recording = false;
+                    l.stage = Layer::Attack; l.env = 0; l.spawnCounter = 0;
                 }
 
                 switch (l.stage)
                 {
-                    case Layer::Attack:
-                        l.env += attackInc;
-                        if (l.env >= 1.0f) { l.env = 1.0f; l.stage = Layer::Sustain; }
-                        break;
-                    case Layer::Sustain:
-                        if (! p.freeze) { l.env *= decayCoef; if (l.env < 1.0e-4f) { l.env = 0; l.stage = Layer::Off; } }
-                        break;
-                    case Layer::Release:
-                        l.env -= releaseDec;
-                        if (l.env <= 0) { l.env = 0; l.stage = Layer::Off; }
-                        break;
+                    case Layer::Attack:  l.env += attackInc; if (l.env >= 1.0f) { l.env = 1.0f; l.stage = Layer::Sustain; } break;
+                    case Layer::Sustain: if (! p.freeze) { l.env *= decayCoef; if (l.env < 1.0e-4f) { l.env = 0; l.stage = Layer::Off; } } break;
+                    case Layer::Release: l.env -= releaseDec; if (l.env <= 0) { l.env = 0; l.stage = Layer::Off; } break;
                     case Layer::Off: break;
                 }
 
-                if ((l.stage == Layer::Attack || l.stage == Layer::Sustain) && l.length > 0)
+                if ((l.stage == Layer::Attack || l.stage == Layer::Sustain) && l.length > 0
+                    && (l.spawnCounter -= 1.0) <= 0.0)
                 {
-                    if ((l.spawnCounter -= 1.0) <= 0.0)
-                    {
-                        spawnGrain (p, li, (double) l.length, 0.9f * (float) l.length, density);
-                        l.spawnCounter = nextInterval();
-                    }
+                    // grains scattered over the body of the note (skip the pick transient)
+                    spawnGrain (p, li, 0.03 * sr, (double) l.length, (double) l.length, 1.0f);
+                    l.spawnCounter = nextInterval (sizeSec * sr);
                 }
             }
         }
 
-        //------------------------------------------------------------ particles
         if (particles > 0.0f && (particleCounter -= 1.0) <= 0.0)
         {
             spawnParticle (p);
-            const double rate = 4.0 + 46.0 * particles;          // up to ~50 particles / s
-            particleCounter = sr / rate * (0.3 + 1.4 * rnd());
+            particleCounter = sr / (4.0 + 46.0 * particles) * (0.3 + 1.4 * rnd());
         }
 
-        //--------------------------------------------------------- render grains
-        float sumL = 0, sumR = 0;
+        //--------------------------------------------------------------- render
+        float sumL = 0, sumR = 0, wsum = 0;
         for (auto& g : grains)
         {
             if (! g.active) continue;
-            float w = window ((float) g.age / (float) g.length) * g.amp;
-            float sL, sR;
+            float w = window ((float) g.age / (float) g.length, g.taper, g.equalPower && ! sparse) * g.amp;
+            if (g.amp >= 1.0f) wsum += w;
+            float smpL, smpR;
             if (g.source < 0)
             {
-                sL = hermite (bufL.data(), bufLen, g.pos);
-                sR = hermite (bufR.data(), bufLen, g.pos);
+                smpL = hermite (bufL.data(), bufLen, g.pos);
+                smpR = hermite (bufR.data(), bufLen, g.pos - g.stereoOffset);
             }
             else
             {
                 auto& l = layers[(size_t) g.source];
                 const int ll = (int) l.L.size();
-                sL = hermite (l.L.data(), ll, g.pos);
-                sR = hermite (l.R.data(), ll, g.pos);
-                w *= l.env * 1.15f;                      // layer amplitude envelope (fade-in TIME, fade-out REGEN)
+                smpL = hermite (l.L.data(), ll, g.pos);
+                smpR = hermite (l.R.data(), ll, g.pos - g.stereoOffset);
+                w *= l.env * 1.15f;
             }
-
-            if (p.stereo) { sumL += sL * w * g.gL; sumR += sR * w * g.gR; }
-            else          { const float m = 0.5f * (sL + sR) * w * g.gL; sumL += m; sumR += m; }
+            if (p.stereo) { sumL += smpL * w * g.gL; sumR += smpR * w * g.gR; }
+            else          { const float m = 0.5f * (smpL + smpR) * w; sumL += m; sumR += m; }
 
             g.pos += g.inc;
             if (++g.age >= g.length) g.active = false;
         }
 
-        fbPrevL = sumL * fbComp;      // granular feedback with power-normalised density
+        if (sparse)   // phase-aligned overlap-add: normalise by the window sum -> constant level
+        {
+            olaNorm += 0.02f * (1.0f / juce::jmax (0.35f, wsum) - olaNorm);
+            sumL *= olaNorm; sumR *= olaNorm;
+        }
+        else { sumL *= normGain; sumR *= normGain; }
+        fbPrevL = sumL * fbComp;
         fbPrevR = sumR * fbComp;
         wetL[i] = sumL;
         wetR[i] = sumR;

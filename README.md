@@ -42,7 +42,7 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
-Program Change 0 = Live, 1-8 = presets. Tous les paramètres sont aussi automatisables dans le DAW.
+Program Change 0 = Live, 1-8 = presets, 9 = Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
 |---|---|---|---|
@@ -64,8 +64,21 @@ Program Change 0 = Live, 1-8 = presets. Tous les paramètres sont aussi automati
 
 ## Presets d'usine
 
-Verts : 1 Crystal Cascade (cascade d'octaves dans un shimmer) · 2 Particle Rain (nuage de particules) · 3 Nebula Pad (nappe synthé désaccordée) · 4 Tenor Sax (attaque soufflée, résonance nasale, vibrato 5 Hz).
-Rouges : 5 Pure Reverse (100 % inversé, wet seul, particules inversées) · 6 Glitch Engine (micro-tranches, répétitions, sauts d'octave) · 7 Tape Echoes (écho bande ping-pong avec wow) · 8 Frozen Cathedral (accords gelés dans une reverb infinie).
+Verts : 1 Crystal Cave (boucles d'octaves régénérées) · 2 Melodic Kaleidoscope (Auto Freeze : mélodies gelées, à l'endroit, à l'envers, à d'autres octaves) · 3 Sea Synth (synthé polyphonique ondulant) · 4 Obligatory Shimmer (reverb shimmer granulaire).
+Rouges : 5 Reverse Reverb (queues de reverb jouées à l'envers) · 6 Stutter Pad (nappe polyphonique un peu glitchée, à jouer staccato) · 7 Sub Octave Ripple (cascade rapide à l'octave inférieure) · 8 Mellow Cello (nappe à l'octave inférieure avec vibrato).
+
+**Slow Attack Soundtrack** (nappe lente avec des sauts d'octave aléatoires) n'occupe aucun emplacement de la pédale. On le charge depuis la liste des presets du DAW (programme 9 ou Program Change 9) ou par le menu clic droit.
+
+## Moteur audio
+
+- **Grains** : enveloppe en cosinus qui s'adapte à OVERLAP (Hann quand les grains se chevauchent, fondu de 20 % au minimum), si bien que deux grains successifs se recouvrent toujours.
+- **Alignement de phase (type WSOLA)** : quand les grains sont peu nombreux, chaque nouveau grain est décalé de ±12 ms pour être en phase avec ceux qui jouent déjà, et le niveau est normalisé par la somme des fenêtres. Un son tenu garde ainsi un niveau constant, sans creux ni décrochage, y compris en reverse.
+- **Reverse** : les grains inversés ne lisent que de l'audio déjà enregistré et ne croisent jamais la tête d'écriture, donc aucun clic.
+- **Reverse reverb** : avec REVERSE actif, une partie de la reverb (dosée par Reverb Mix) est placée avant les grains, qui rejouent donc des queues de reverb à l'envers.
+- **Diffuseur** : un réseau de filtres passe-tout, sur le principe de Mutable Instruments Clouds, fond les grains en nappe quand OVERLAP est élevé.
+- **Reverb** : plate de Dattorro modulée, de la petite pièce jusqu'au maintien infini.
+- **Stéréo** : panoramique et léger décalage gauche/droite par grain.
+- **Mode Layers** : chaque voix a une légère dérive de hauteur, façon synthé analogique.
 
 ## Fonctions cachées (sans boutons supplémentaires)
 

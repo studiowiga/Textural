@@ -84,6 +84,7 @@ String TexturalAudioProcessor::presetName (int index) const
 {
     if (index <= 0) return "Live";
     const auto& fp = factoryPresets();
+    if (index == kExtraPreset) return fp[(size_t) index - 1].name;              // DAW-only preset
     if (index <= (int) fp.size()) return String (index) + " " + fp[(size_t) index - 1].name;
     return {};
 }
@@ -103,7 +104,12 @@ void TexturalAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     filter.prepare (sampleRate);
     vibrato.prepare (sampleRate);
     reverb.prepare (sampleRate);
+    preReverb.prepare (sampleRate);
+    diffuser.prepare (sampleRate);
     wetBuffer.setSize (2, jmax (1, samplesPerBlock));
+    recBuffer.setSize (2, jmax (1, samplesPerBlock));
+    lpCoef = 1.0f - std::exp (-MathConstants<float>::twoPi * 15000.0f / (float) sampleRate);
+    preAmt.reset (sampleRate, 0.1); diffAmt.reset (sampleRate, 0.1);
     for (auto* s : { &wetG, &dryG, &rvMix, &outGain })
         s->reset (sampleRate, 0.03);
     wetG.setCurrentAndTargetValue (Map::wetGain (value (PID::mix)));
@@ -121,7 +127,7 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         const auto m = meta.getMessage();
         if (m.isProgramChange())
         {
-            pendingPreset = jlimit (0, 8, m.getProgramChangeNumber());
+            pendingPreset = jlimit (0, kExtraPreset, m.getProgramChangeNumber());
             triggerAsyncUpdate();
             continue;
         }
@@ -159,6 +165,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     const int numOut = getTotalNumOutputChannels();
     if (n == 0) return;
     if (wetBuffer.getNumSamples() < n) wetBuffer.setSize (2, n, false, false, true);
+    if (recBuffer.getNumSamples() < n) recBuffer.setSize (2, n, false, false, true);
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -170,7 +177,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     const float ov = value (PID::overlap);
     if (tapSpacing.load() > 0.0f && std::abs (ov - overlapAtTap.load()) > 0.003f) tapSpacing = 0.0f;
 
-    if (clearRequested.exchange (false)) { engine.reset(); reverb.reset(); vibrato.reset(); filter.reset(); }
+    if (clearRequested.exchange (false)) { engine.reset(); reverb.reset(); preReverb.reset(); diffuser.reset(); vibrato.reset(); filter.reset(); }
 
     const bool engaged = value (PID::bypass) < 0.5f;
     const bool trails  = value (PID::trails) > 0.5f;
@@ -203,12 +210,38 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     const bool processFx = engaged || trails || engageFade > 0.0f;
     if (! processFx)
     {
-        if (! wasCleared) { engine.reset(); reverb.reset(); vibrato.reset(); filter.reset(); wasCleared = true; }
+        if (! wasCleared) { engine.reset(); reverb.reset(); preReverb.reset(); diffuser.reset(); vibrato.reset(); filter.reset(); wasCleared = true; }
         return;   // dry signal passes untouched
     }
     wasCleared = false;
 
-    engine.process (inL, inR, wetBuffer.getWritePointer (0), wetBuffer.getWritePointer (1), n, ep);
+    // REVERSE REVERB: with REVERSE on, the reverb is also placed before the grains,
+    // so reversed grains replay reverb tails backwards (swelling "reverse reverb").
+    preAmt.setTargetValue (ep.reverse ? value (PID::reverbMix) : 0.0f);
+    preReverb.setTone (value (PID::cutoff));
+    preReverb.setDecay (jmin (12.0f, Map::reverbRT60 (value (PID::reverbDecay))));
+    {
+        float* rl = recBuffer.getWritePointer (0);
+        float* rr = recBuffer.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            const float a = preAmt.getNextValue();
+            if (a > 0.0005f)
+            {
+                float pl, pr;
+                preReverb.process (inL[i], inR[i], pl, pr);
+                rl[i] = inL[i] * (1.0f - 0.35f * a) + 1.0f * a * pl;
+                rr[i] = inR[i] * (1.0f - 0.35f * a) + 1.0f * a * pr;
+            }
+            else { rl[i] = inL[i]; rr[i] = inR[i]; }
+        }
+    }
+
+    engine.process (inL, inR, recBuffer.getReadPointer (0), recBuffer.getReadPointer (1),
+                    wetBuffer.getWritePointer (0), wetBuffer.getWritePointer (1), n, ep);
+
+    // the denser the cloud, the more the grains are blurred together (planing texture)
+    diffAmt.setTargetValue (jlimit (0.0f, 0.75f, (Map::overlapCount (ov) - 3.0f) / 16.0f));
 
     const float mix = value (PID::mix);
     wetG.setTargetValue (Map::wetGain (mix));
@@ -229,6 +262,12 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
         const float xL = inL[i], xR = inR[i];
 
         float wL = wl[i], wR = wr[i];
+        // DC blocker + gentle 15 kHz top-end smoothing (pitched-up grains stay sweet)
+        const float yL = wL - dcXL + 0.9995f * dcL; dcXL = wL; dcL = yL;
+        const float yR = wR - dcXR + 0.9995f * dcR; dcXR = wR; dcR = yR;
+        lpL += lpCoef * (yL - lpL); lpR += lpCoef * (yR - lpR);
+        wL = lpL; wR = lpR;
+        diffuser.process (wL, wR, diffAmt.getNextValue());
         vibrato.process (wL, wR);
         if (ep.mode == Mode::Layers)   // warm analog-synth style saturation on the layered voices
         {
@@ -238,7 +277,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
         // wet-bus level control (keeps dense / regenerating textures musical)
         const float wpk = jmax (std::abs (wL), std::abs (wR));
         wetEnv += (wpk > wetEnv ? 0.01f : 0.00008f) * (wpk - wetEnv);
-        const float agc = wetEnv > 0.5f ? 0.5f / wetEnv : 1.0f;
+        const float agc = wetEnv > 0.4f ? 0.4f / wetEnv : 1.0f;
         wL *= agc; wR *= agc;
         const float wg = wetG.getNextValue();
         wL *= wg; wR *= wg;
@@ -284,7 +323,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
             if (! std::isfinite (buffer.getSample (ch, i)))
             {
                 buffer.clear();
-                engine.reset(); reverb.reset(); vibrato.reset(); filter.reset();
+                engine.reset(); reverb.reset(); preReverb.reset(); diffuser.reset(); vibrato.reset(); filter.reset();
                 return;
             }
 }
@@ -323,11 +362,12 @@ void TexturalAudioProcessor::applySnapshot (const std::map<String, float>& s)
 
 void TexturalAudioProcessor::selectPreset (int index)
 {
-    index = jlimit (0, 8, index);
+    index = jlimit (0, kExtraPreset, index);
     const int prev = currentPreset.load();
     if (prev == 0 && index != 0) liveSnapshot = takeSnapshot();      // remember live mode settings
 
     if (index == 0) applySnapshot (liveSnapshot);
+    else if (index == kExtraPreset) applySnapshot (factorySnapshot (kExtraPreset - 1));   // not on the pedal slots
     else            applySnapshot (userPresets[(size_t) index - 1]);
 
     loadedSnapshot = takeSnapshot();
@@ -336,8 +376,8 @@ void TexturalAudioProcessor::selectPreset (int index)
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }
 
-void TexturalAudioProcessor::nextPreset()      { selectPreset ((currentPreset.load() + 1) % 9); }
-void TexturalAudioProcessor::previousPreset()  { selectPreset ((currentPreset.load() + 8) % 9); }
+void TexturalAudioProcessor::nextPreset()      { selectPreset ((jmin (8, currentPreset.load()) + 1) % 9); }
+void TexturalAudioProcessor::previousPreset()  { selectPreset ((jmin (8, currentPreset.load()) + 8) % 9); }
 
 void TexturalAudioProcessor::savePresetTo (int slot)
 {
@@ -536,7 +576,7 @@ void TexturalAudioProcessor::setStateInformation (const void* data, int size)
     }
     liveSnapshot   = stringToSnapshot (state.getProperty ("live").toString());
     loadedSnapshot = stringToSnapshot (state.getProperty ("loaded").toString());
-    currentPreset  = jlimit (0, 8, (int) state.getProperty ("preset", 0));
+    currentPreset  = jlimit (0, kExtraPreset, (int) state.getProperty ("preset", 0));
     uiHeight       = jlimit (493, 1000, (int) state.getProperty ("uiHeight", 493));
     apvts.replaceState (state);
 }

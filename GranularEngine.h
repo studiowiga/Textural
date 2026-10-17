@@ -6,13 +6,25 @@
 #include <atomic>
 
 //==============================================================================
-//  Granular engine reproducing the three Textures modes:
-//   - Delay       : continuous recording, grains read 'TIME' behind the write head
-//   - Auto Freeze : records TIME seconds after each detected note, then freezes
-//   - Layers      : four independent note/chord buffers with attack/decay envelopes
-//  Includes delay feedback + granular feedback (REGEN / REGEN MIX), reverse with
-//  probability, pitch (+/-2 oct, quantise, random harmonic deviations) and
-//  randomisation of position, size and overlap.
+//  Textural granular engine (v3)
+//
+//  Modes (MODE button):
+//   - Delay       : input written continuously; grains read TIME behind the head.
+//   - Auto Freeze : each detected note/chord is recorded for TIME seconds, then the
+//                   buffer freezes and grains wander through it endlessly.
+//   - Layers      : up to 4 notes/chords in 4 buffers, each a "synth voice" with a
+//                   fade-in (TIME) and fade-out (REGEN); 5th replaces the oldest.
+//
+//  Grain quality:
+//   - adaptive raised-cosine window: Hann when grains overlap, a 20 % cross-fade
+//     when OVERLAP is minimal, so consecutive grains always overlap -> no gaps;
+//   - reversed grains use equal-power fades and only read audio that is already
+//     recorded (never cross the write head) -> click-free, drop-out free reverse;
+//   - 4-point Hermite interpolation; slight stereo decorrelation per grain;
+//   - random "sowing" (position / size / spacing / pitch) to avoid comb ringing.
+//
+//  Feedback: delay feedback + granular feedback (REGEN, REGEN MIX), toned by the
+//  filter knob, soft-limited, ping-pong in stereo, tape wow from vibrato depth.
 //==============================================================================
 
 struct EngineParams
@@ -24,11 +36,11 @@ struct EngineParams
     float   timeRnd     = 0.15f, sizeRnd = 0.15f, overlapRnd = 0.15f;
     float   regenMix    = 0.5f, pitchRnd = 0.0f, reverseRnd = 0.5f;
     bool    quantize    = false;
-    bool    stereo      = false;     // random grain panning
+    bool    stereo      = false;
     float   tapSpacing  = 0.0f;      // seconds, 0 = use OVERLAP
     bool    inputMuted  = false;     // trails while bypassed
     float   mix         = 0.5f;      // MIX above 60 % sprays particle grains
-    float   cutoff      = 0.5f;      // dual filter knob, also colours the delay repeats
+    float   cutoff      = 0.5f;      // filter knob, also colours the regenerated repeats
     float   vibDepth    = 0.0f;      // vibrato depth, also adds tape wow to the repeats
 };
 
@@ -37,13 +49,16 @@ class GranularEngine
 public:
     void prepare (double sampleRate, int maxBlock);
     void reset();
-    void process (const float* inL, const float* inR, float* wetL, float* wetR, int numSamples, const EngineParams& p);
+    // preL/preR (optional): signal written to the buffer instead of the input
+    // (used for reverse reverb: reverb before the reversed grains)
+    void process (const float* inL, const float* inR, const float* recL, const float* recR,
+                  float* wetL, float* wetR, int numSamples, const EngineParams& p);
 
-    std::atomic<bool> frozen { false };     // for the MODE LED flashing
+    std::atomic<bool> frozen { false };
     std::atomic<int>  layersActive { 0 };
 
 private:
-    static constexpr int kMaxGrains = 192;
+    static constexpr int kMaxGrains = 160;
     static constexpr int kLayers    = 4;
 
     struct Grain
@@ -51,9 +66,12 @@ private:
         bool   active = false;
         int    source = -1;           // -1 = main buffer, 0..3 = layer buffer
         double pos = 0, inc = 1;
+        double stereoOffset = 0;      // right channel reads slightly apart (width)
         int    length = 1, age = 0;
+        float  taper = 0.5f;          // fade fraction on each side
+        bool   equalPower = false;    // reversed grains
         float  gL = 1, gR = 1;
-        float  amp = 1;               // particles are quieter
+        float  amp = 1;
     };
 
     struct Layer
@@ -65,17 +83,20 @@ private:
         int    recStart = 0, recCount = 0, recLen = 0, length = 0;
         double spawnCounter = 0;
         uint64_t order = 0;
+        float  drift = 0;             // tiny per-voice detune (analog synth feel)
         std::vector<float> L, R;
     };
 
-    // helpers
     inline float rnd()   { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return (float) (seed & 0xFFFFFF) / 16777216.0f; }
     inline float brnd()  { return rnd() * 2.0f - 1.0f; }
     static inline float softClip (float x) { x = juce::jlimit (-3.0f, 3.0f, x); return x * (27.0f + x * x) / (27.0f + 9.0f * x * x); }
-    static inline float window (float t)
+
+    static inline float window (float t, float taper, bool equalPower)
     {
-        // Hann grain envelope: smooth, airy grains that blend into a granular cloud
-        return 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * t);
+        float w = 1.0f;
+        if (t < taper)             w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * t / taper);
+        else if (t > 1.0f - taper) w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (1.0f - t) / taper);
+        return equalPower ? std::sqrt (w) : w;
     }
     static inline float hermite (const float* b, int len, double pos)
     {
@@ -92,11 +113,14 @@ private:
         return ((c3 * f + c2) * f + c1) * f + y1;
     }
 
-    float  grainRatio (const EngineParams& p);
-    void   spawnGrain (const EngineParams& p, int source, double sourceEnd, float spanJitterSamples, float density);
+    float  grainSemis (const EngineParams& p);
+    float  effectiveDensity (const EngineParams& p) const;
+    void   spawnGrain (const EngineParams& p, int source, double regionStart, double regionEnd, double anchor, float scatter);
     void   spawnParticle (const EngineParams& p);
     void   onsetDetected (const EngineParams& p);
     bool   detectOnset (float x);
+    Grain* freeGrain();
+    double alignToPrevious (const Grain& fresh, int fadeLen, double minShift, double maxShift, float& corrOut);
 
     double sr = 44100;
     std::vector<float> bufL, bufR;
@@ -105,22 +129,21 @@ private:
     std::array<Layer, kLayers> layers;
     uint64_t layerCounter = 0;
 
-    // Auto Freeze
     bool   afRecording = false, afHasSegment = false;
     int    afRecStart = 0, afRecCount = 0, afRecLen = 0;
     int    afSegStart = 0, afSegLen = 0;
 
-    // onset detector
     float  envFast = 0, envSlow = 0, noiseFloor = 0.001f, holdSeconds = 0.12f;
+    float  fA = 0, fR = 0, sA = 0, sR = 0;
     int    holdOff = 0;
 
-    double spawnCounter = 0;
-    float  timeSmooth = 0.2f;
+    double spawnCounter = 0, particleCounter = 0;
+    float  timeSmooth = 0.3f;
     float  fbPrevL = 0, fbPrevR = 0, fbEnv = 0;
-    double particleCounter = 0;
-    double lastStart = 0; int lastLen = 0; float lastRate = 1; bool haveLast = false;
+    float  fbLpL = 0, fbLpR = 0, fbHpL = 0, fbHpR = 0;
     float  wowPhase = 0;
-    float  fbLpL = 0, fbLpR = 0, fbHpL = 0, fbHpR = 0, fbLpCoef = 0.5f, fbHpCoef = 0.01f;
+    double lastStart = 0; int lastLen = 0; float lastRate = 1; bool haveLast = false;
+    float  normGain = 1.0f, olaNorm = 1.0f;
     Mode   lastMode = Mode::Delay;
     uint32_t seed = 0x9E3779B9u;
 };

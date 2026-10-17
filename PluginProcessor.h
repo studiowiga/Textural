@@ -31,7 +31,8 @@ public:
     bool isMidiEffect() const override                     { return false; }
     double getTailLengthSeconds() const override           { return 20.0; }
 
-    int getNumPrograms() override                          { return 9; }
+    static constexpr int kExtraPreset = 9;                 // Slow Attack Soundtrack: DAW / menu only
+    int getNumPrograms() override                          { return 10; }
     int getCurrentProgram() override                       { return currentPreset.load(); }
     void setCurrentProgram (int index) override            { selectPreset (index); }
     const juce::String getProgramName (int index) override;
@@ -110,8 +111,12 @@ private:
     GranularEngine engine;
     DualFilter     filter;
     Vibrato        vibrato;
-    FDNReverb      reverb;
-    juce::AudioBuffer<float> wetBuffer;
+    FDNReverb      reverb;          // main plate (after the grains)
+    FDNReverb      preReverb;       // reverse reverb: plate before the reversed grains
+    Diffuser       diffuser;
+    juce::AudioBuffer<float> wetBuffer, recBuffer;
+    float dcL = 0, dcR = 0, dcXL = 0, dcXR = 0, lpL = 0, lpR = 0, lpCoef = 0.8f;
+    juce::SmoothedValue<float> preAmt, diffAmt;
     juce::SmoothedValue<float> wetG, dryG, rvMix, outGain;
     float engageFade = 1.0f, wetEnv = 0.0f;
     bool  wasCleared = false;

@@ -131,114 +131,155 @@ private:
 };
 
 //==============================================================================
-// Lush "ambient" FDN reverb: 8 modulated delay lines (chorused tail), 6-stage
-// input diffusion (bloom), damping linked to the dual filter, infinite hold at
-// the top of the Reverb Decay range.
-class FDNReverb
+//  Small delay-line helpers
+//==============================================================================
+struct DelayLine
+{
+    std::vector<float> b; int w = 0, n = 1;
+    void init (int len) { n = juce::jmax (4, len); b.assign ((size_t) n, 0.0f); w = 0; }
+    void clear() { std::fill (b.begin(), b.end(), 0.0f); }
+    inline void push (float x) { b[(size_t) w] = x; if (++w >= n) w = 0; }
+    inline float tap (int d) const { int i = w - 1 - d; while (i < 0) i += n; return b[(size_t) i]; }
+    inline float tapf (float d) const
+    {
+        const int i0 = (int) d; const float f = d - (float) i0;
+        return tap (i0) + f * (tap (i0 + 1) - tap (i0));
+    }
+};
+
+// Schroeder all-pass with optional modulated (fractional) delay
+struct AllPass
+{
+    DelayLine d; float len = 1, g = 0.5f;
+    void init (float lengthSamples, float gain, int extra = 0) { len = lengthSamples; g = gain; d.init ((int) lengthSamples + extra + 4); }
+    void clear() { d.clear(); }
+    inline float process (float x, float mod = 0.0f)
+    {
+        const float delayed = d.tapf (juce::jmax (1.0f, len + mod) - 1.0f);
+        const float v = x + g * delayed;
+        d.push (v);
+        return delayed - g * v;
+    }
+};
+
+//==============================================================================
+//  Stereo diffuser (all-pass network, "reverb without a tail", like Clouds):
+//  smears grain edges into a smooth, blurred texture.
+//==============================================================================
+class Diffuser
+{
+public:
+    void prepare (double sampleRate)
+    {
+        const float k = (float) sampleRate / 1000.0f;
+        static const float msL[4] = { 3.13f, 7.37f, 11.71f, 17.29f };
+        static const float msR[4] = { 3.71f, 6.83f, 12.97f, 16.13f };
+        for (int i = 0; i < 4; ++i) { apL[i].init (msL[i] * k, 0.62f); apR[i].init (msR[i] * k, 0.62f); }
+    }
+    void reset() { for (auto& a : apL) a.clear(); for (auto& a : apR) a.clear(); }
+    void process (float& l, float& r, float amount)
+    {
+        if (amount <= 0.001f) return;
+        float a = l, b = r;
+        for (auto& ap : apL) a = ap.process (a);
+        for (auto& ap : apR) b = ap.process (b);
+        l += amount * (a - l);
+        r += amount * (b - r);
+    }
+private:
+    AllPass apL[4], apR[4];
+};
+
+//==============================================================================
+//  Plate reverb after Jon Dattorro, "Effect Design Part 1" (JAES 1997):
+//  input band-limiting + 4 input diffusers + figure-of-eight modulated tank.
+//  Modulation keeps long tails lush and free of metallic ringing; the decay
+//  goes from short rooms to an infinite "hold" at the top of the range.
+//==============================================================================
+class FDNReverb   // (kept name for the processor) -> Dattorro plate
 {
 public:
     void prepare (double sampleRate)
     {
         sr = (float) sampleRate;
-        static const float ms[8] = { 43.1f, 53.7f, 61.9f, 73.3f, 83.9f, 97.1f, 109.7f, 127.3f };
-        maxMod = (int) (0.0035f * sr) + 4;
-        for (int i = 0; i < 8; ++i)
-        {
-            len[i] = (int) (ms[i] * 0.001f * sr);
-            size[i] = len[i] + maxMod + 4;
-            line[i].assign ((size_t) size[i], 0.0f);
-            pos[i] = 0;
-            lp[i] = 0;
-            lfo[i] = (float) i * 0.37f;
-            lfoInc[i] = (0.11f + 0.047f * (float) i) / sr;
-        }
-        static const float apMs[6] = { 4.77f, 3.59f, 12.73f, 9.31f, 23.1f, 17.9f };
-        for (int i = 0; i < 6; ++i)
-        {
-            apLen[i] = (int) (apMs[i] * 0.001f * sr);
-            ap[i].assign ((size_t) apLen[i] + 1, 0.0f);
-            apPos[i] = 0;
-        }
+        k = sr / 29761.0f;
+        preDelay.init ((int) (0.012f * sr) + 4);
+        inAP[0].init (142 * k, 0.75f); inAP[1].init (107 * k, 0.75f);
+        inAP[2].init (379 * k, 0.625f); inAP[3].init (277 * k, 0.625f);
+        const int ex = (int) (24 * k) + 4;
+        tankAP1[0].init (672 * k, -0.70f, ex);  tankAP1[1].init (908 * k, -0.70f, ex);
+        tankDel1[0].init ((int) (4453 * k) + 8); tankDel1[1].init ((int) (4217 * k) + 8);
+        tankAP2[0].init (1800 * k, 0.5f);       tankAP2[1].init (2656 * k, 0.5f);
+        tankDel2[0].init ((int) (3720 * k) + 8); tankDel2[1].init ((int) (3163 * k) + 8);
+        len1[0] = 4453 * k; len1[1] = 4217 * k; len2[0] = 3720 * k; len2[1] = 3163 * k;
+        loopSeconds = (672 + 4453 + 1800 + 3720) / 29761.0f;
+        reset();
         currentRT = -1;
         setDecay (3.0f);
     }
 
     void reset()
     {
-        for (auto& l : line) std::fill (l.begin(), l.end(), 0.0f);
-        for (auto& a : ap)   std::fill (a.begin(), a.end(), 0.0f);
-        for (auto& v : lp) v = 0;
+        preDelay.clear(); for (auto& a : inAP) a.clear();
+        for (int i = 0; i < 2; ++i) { tankAP1[i].clear(); tankAP2[i].clear(); tankDel1[i].clear(); tankDel2[i].clear(); damp[i] = 0; }
+        bw = 0; fb[0] = fb[1] = 0; lfo = 0;
     }
 
-    // tone: 0 = dark, 0.5 = neutral, 1 = bright
-    void setTone (float t) { tone = juce::jlimit (0.0f, 1.0f, t); currentRT = -1; }
+    void setTone (float t) { tone = juce::jlimit (0.0f, 1.0f, t); }
 
     void setDecay (float rt60)
     {
         if (std::abs (rt60 - currentRT) < 0.01f) return;
         currentRT = rt60;
         infinite = rt60 > 100.0f;
-        for (int i = 0; i < 8; ++i)
-            gain[i] = infinite ? 0.99985f : std::pow (10.0f, -3.0f * (float) len[i] / (rt60 * sr));
-        const float baseDamp = infinite ? 0.55f : juce::jlimit (0.12f, 0.75f, 0.6f - 0.012f * rt60);
-        damp = juce::jlimit (0.06f, 0.95f, baseDamp * (0.45f + 1.1f * tone));
-        modDepth = juce::jlimit (0.0f, (float) maxMod - 2.0f, (0.0008f + 0.00004f * juce::jmin (rt60, 60.0f)) * sr);
-        outScale = 1.0f / std::sqrt (1.0f + 0.22f * juce::jmin (rt60, 25.0f));
+        decay = infinite ? 0.9999f : juce::jlimit (0.05f, 0.995f, std::pow (10.0f, -3.0f * loopSeconds / rt60));
     }
 
     void process (float inL, float inR, float& outL, float& outR)
     {
-        float x = 0.5f * (inL + inR);
-        for (int i = 0; i < 6; ++i)  // series all-pass diffusion (bloom)
-        {
-            auto& b = ap[i];
-            const float d = b[(size_t) apPos[i]];
-            const float g = i < 4 ? 0.62f : 0.5f;
-            const float y = -g * x + d;
-            b[(size_t) apPos[i]] = x + g * y;
-            if (++apPos[i] >= apLen[i]) apPos[i] = 0;
-            x = y;
-        }
+        // tone: dark plate below noon, bright above
+        const float dampCoef = juce::jlimit (0.02f, 0.7f, (infinite ? 0.15f : 0.25f) - 0.4f * (tone - 0.5f));
+        const float bwCoef   = juce::jlimit (0.35f, 0.9995f, 0.72f + 0.5f * (tone - 0.5f));
 
-        float o[8];
-        for (int i = 0; i < 8; ++i)
-        {
-            lfo[i] += lfoInc[i]; if (lfo[i] >= 1.0f) lfo[i] -= 1.0f;
-            const float m = modDepth * (0.5f + 0.5f * std::sin (juce::MathConstants<float>::twoPi * lfo[i]));
-            float rp = (float) pos[i] - (float) len[i] - m;
-            while (rp < 0) rp += (float) size[i];
-            const int i0 = (int) rp % size[i];
-            const int i1 = (i0 + 1) % size[i];
-            const float f = rp - std::floor (rp);
-            const float v = line[i][(size_t) i0] + f * (line[i][(size_t) i1] - line[i][(size_t) i0]);
-            lp[i] += damp * (v - lp[i]);
-            o[i] = lp[i] * gain[i];
-        }
-        float h[8];
-        for (int i = 0; i < 8; ++i) h[i] = o[i];
-        for (int st = 1; st < 8; st <<= 1)
-            for (int i = 0; i < 8; i += st << 1)
-                for (int j = i; j < i + st; ++j)
-                {
-                    const float a = h[j], b = h[j + st];
-                    h[j] = a + b; h[j + st] = a - b;
-                }
-        const float norm = 0.35355339f;
-        const float inG = infinite ? 0.02f : 1.0f;   // infinite: tail holds, new input barely enters
-        for (int i = 0; i < 8; ++i)
-        {
-            float w = h[i] * norm + inG * (x * ((i & 1) ? 0.3f : -0.3f) + (i < 4 ? inL : inR) * 0.12f);
-            line[i][(size_t) pos[i]] = w;
-            if (++pos[i] >= size[i]) pos[i] = 0;
-        }
-        outL = (o[0] - o[2] + o[4] - o[6]) * 0.6f * outScale;
-        outR = (o[1] - o[3] + o[5] - o[7]) * 0.6f * outScale;
+        float x = 0.5f * (inL + inR) * (infinite ? 0.0f : 1.0f);
+        preDelay.push (x);
+        x = preDelay.tap ((int) (0.010f * sr));
+        bw += bwCoef * (x - bw);
+        x = bw;
+        for (auto& a : inAP) x = a.process (x);
+
+        lfo += 0.9f / sr; if (lfo >= 1.0f) lfo -= 1.0f;
+        const float exc = 12.0f * k;
+        const float m0 = exc * std::sin (juce::MathConstants<float>::twoPi * lfo);
+        const float m1 = exc * std::sin (juce::MathConstants<float>::twoPi * (lfo + 0.25f));
+
+        float a = x + fb[1];
+        float b = x + fb[0];
+        a = tankAP1[0].process (a, m0);  tankDel1[0].push (a);
+        b = tankAP1[1].process (b, m1);  tankDel1[1].push (b);
+        float da = tankDel1[0].tapf (len1[0] - 1.0f);
+        float db = tankDel1[1].tapf (len1[1] - 1.0f);
+        damp[0] += (1.0f - dampCoef) * (da - damp[0]);
+        damp[1] += (1.0f - dampCoef) * (db - damp[1]);
+        da = tankAP2[0].process (damp[0] * decay);
+        db = tankAP2[1].process (damp[1] * decay);
+        tankDel2[0].push (da); tankDel2[1].push (db);
+        fb[0] = tankDel2[0].tapf (len2[0] - 1.0f) * decay;
+        fb[1] = tankDel2[1].tapf (len2[1] - 1.0f) * decay;
+
+        auto T = [this] (const DelayLine& d, int s) { return d.tap ((int) ((float) s * k)); };
+        float l = T (tankDel1[1], 266) + T (tankDel1[1], 2974) - T (tankAP2[1].d, 1913) + T (tankDel2[1], 1996)
+                - T (tankDel1[0], 1990) - T (tankAP2[0].d, 187) - T (tankDel2[0], 1066);
+        float r = T (tankDel1[0], 353) + T (tankDel1[0], 3627) - T (tankAP2[0].d, 1228) + T (tankDel2[0], 2673)
+                - T (tankDel1[1], 2111) - T (tankAP2[1].d, 335) - T (tankDel2[1], 121);
+        outL = l * 0.6f;
+        outR = r * 0.6f;
     }
 
 private:
-    std::vector<float> line[8], ap[6];
-    int len[8] {}, size[8] {}, pos[8] {}, apLen[6] {}, apPos[6] {}, maxMod = 8;
-    float gain[8] {}, lp[8] {}, lfo[8] {}, lfoInc[8] {};
-    float sr = 44100, damp = 0.3f, currentRT = -1, outScale = 1.0f, modDepth = 0.0f, tone = 0.5f;
+    float sr = 44100, k = 1, decay = 0.5f, tone = 0.5f, bw = 0, lfo = 0, currentRT = -1, loopSeconds = 0.36f;
+    float fb[2] {}, damp[2] {}, len1[2] {}, len2[2] {};
     bool infinite = false;
+    DelayLine preDelay, tankDel1[2], tankDel2[2];
+    AllPass inAP[4], tankAP1[2], tankAP2[2];
 };
