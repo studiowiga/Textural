@@ -42,7 +42,7 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
-Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack, 10 = Aurora Grains. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack et Aurora Grains. Tous les paramètres sont aussi automatisables dans le DAW.
+Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
 |---|---|---|---|
@@ -78,7 +78,7 @@ Rouges :
 7. Mellow Cello : nappe une octave plus bas avec vibrato, plus présente après la note.
 8. Stardust Cloud : synthé granulaire en Layers avec une pluie de particules.
 
-**Slow Attack Soundtrack** et **Aurora Grains** (nappe de synthé granulaire : grains minuscules désaccordés, filtre résonant, chorus lent) n'occupent aucun emplacement de la pédale. On les charge depuis la liste des presets du DAW (programmes 9 et 10, Program Change 9 et 10) ou par le menu clic droit.
+**Slow Attack Soundtrack** (Layers, attaque 587 ms, déclin 17,76 s, pitch −7 demi-tons, size 203 ms, overlap 18, mix 38 %) n'occupe aucun emplacement de la pédale. On le charge depuis la liste des presets du DAW (programme 9, Program Change 9) ou par le menu clic droit.
 
 ## Moteur audio
 

@@ -411,7 +411,7 @@ void TexturalAudioProcessorEditor::showMenu()
             case 4: ed.setHeightKeepingAspect (1000); break;
             case 21: ed.proc.resetPresetToFactory (ed.proc.currentPreset.load()); break;
             case 22: ed.proc.resetAllPresets(); break;
-            case 23: case 24:
+            case 23:
             {
                 const int x = TexturalAudioProcessor::kExtraPreset + r - 23;
                 ed.proc.selectPreset (x);

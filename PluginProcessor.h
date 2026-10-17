@@ -32,7 +32,7 @@ public:
     double getTailLengthSeconds() const override           { return 20.0; }
 
     static constexpr int kExtraPreset = 9;                 // first DAW / menu-only preset (Slow Attack Soundtrack)
-    static constexpr int kLastPreset  = 10;                // last one (Aurora Grains)
+    static constexpr int kLastPreset  = 9;                 // last one
     static constexpr int kLivePreset  = 2;                 // pedal position 2 = Live mode
     static bool isLive (int i) { return i == 0 || i == kLivePreset; }
     // DAW program list: 0..7 = pedal positions 1..8 (Live appears once, as "2 Live"), 8 = extra preset
