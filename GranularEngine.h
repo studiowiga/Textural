@@ -27,6 +27,9 @@ struct EngineParams
     bool    stereo      = false;     // random grain panning
     float   tapSpacing  = 0.0f;      // seconds, 0 = use OVERLAP
     bool    inputMuted  = false;     // trails while bypassed
+    float   mix         = 0.5f;      // MIX above 60 % sprays particle grains
+    float   cutoff      = 0.5f;      // dual filter knob, also colours the delay repeats
+    float   vibDepth    = 0.0f;      // vibrato depth, also adds tape wow to the repeats
 };
 
 class GranularEngine
@@ -50,6 +53,7 @@ private:
         double pos = 0, inc = 1;
         int    length = 1, age = 0;
         float  gL = 1, gR = 1;
+        float  amp = 1;               // particles are quieter
     };
 
     struct Layer
@@ -92,6 +96,7 @@ private:
 
     float  grainRatio (const EngineParams& p);
     void   spawnGrain (const EngineParams& p, int source, double sourceEnd, float spanJitterSamples, float density);
+    void   spawnParticle (const EngineParams& p);
     void   onsetDetected (const EngineParams& p);
     bool   detectOnset (float x);
 
@@ -114,6 +119,9 @@ private:
     double spawnCounter = 0;
     float  timeSmooth = 0.2f;
     float  fbPrevL = 0, fbPrevR = 0, fbEnv = 0;
+    double particleCounter = 0;
+    double lastStart = 0; int lastLen = 0; float lastRate = 1; bool haveLast = false;
+    float  wowPhase = 0;
     float  fbLpL = 0, fbLpR = 0, fbHpL = 0, fbHpR = 0, fbLpCoef = 0.5f, fbHpCoef = 0.01f;
     Mode   lastMode = Mode::Delay;
     uint32_t seed = 0x9E3779B9u;

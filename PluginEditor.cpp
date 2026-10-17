@@ -6,31 +6,34 @@ namespace
 {
     struct KnobPos { float x, y, r; bool orange; };
     // positions in design units (faceplate 595 x 1000)
+    // Layout in design units: the pedal photo (1058 x 1805 px) is scaled to 1000 units high
+    // and sits between two black side margins of 100 px each at the default 493 px height.
     const KnobPos kKnobs[6] = {
-        { 125.0f, 162.2f, 64.0f, false },   // TIME
-        { 299.8f, 162.2f, 64.0f, false },   // SIZE
-        { 473.2f, 161.0f, 64.0f, false },   // OVERLAP
-        { 123.5f, 332.1f, 64.0f, false },   // REGEN
-        { 296.4f, 331.3f, 62.0f, true  },   // PITCH (centred on its scale)
-        { 473.9f, 333.6f, 64.0f, false },   // MIX
+        { 321.7f, 162.6f, 64.0f, false },   // TIME
+        { 495.6f, 162.6f, 64.0f, false },   // SIZE
+        { 667.4f, 161.5f, 64.0f, false },   // OVERLAP
+        { 320.0f, 333.2f, 64.0f, false },   // REGEN
+        { 491.8f, 330.2f, 64.0f, true  },   // PITCH
+        { 667.4f, 334.9f, 64.0f, false },   // MIX
     };
-    const Point<float> kReverseBtn { 211.7f, 68.3f };
-    const Point<float> kModeBtn    { 385.0f, 68.3f };
-    constexpr float    kBtnR       = 19.0f;    // reduced top LED buttons
-    const Point<float> kLed        { 300.6f, 583.6f };
-    const Point<float> kFootswitch { 298.3f, 714.0f };   // footswitch of the original visual
-    constexpr float    kFootswitchR = 75.2f;
-    const float        kPresetLedX[4] = { 206.3f, 253.8f, 298.3f, 344.3f };
-    constexpr float    kPresetLedY = 929.4f, kPresetLedR = 13.8f;
-    const Point<float> kPresetBtn  { 395.0f, 928.7f };
+    const Point<float> kReverseBtn { 408.1f, 69.0f };
+    const Point<float> kModeBtn    { 579.8f, 69.0f };
+    constexpr float    kBtnR       = 19.0f;
+    const Point<float> kLed        { 492.6f, 583.7f };
+    const Point<float> kFootswitch { 492.6f, 715.2f };
+    constexpr float    kFootswitchR = 73.1f;
+    const float        kPresetLedX[4] = { 402.0f, 448.6f, 495.1f, 540.5f };
+    constexpr float    kPresetLedY = 927.1f, kPresetLedR = 14.6f;
+    const Point<float> kPresetBtn  { 588.2f, 926.0f };
+    constexpr float    kPedalX = TexturalAudioProcessorEditor::kSideMargin;   // faceplate drawn from here
 
-    const Colour kModeColours[3] = { Colour (0xff2fa83a),    // Delay  (green tree)
-                                     Colour (0xfff7861d),    // Auto Freeze (orange asterisk)
-                                     Colour (0xffd8262c) };  // Layers (red rings)
-    const Colour kReverseColour (0xff6cc8ff);
-    const Colour kPresetGreen   (0xff31d856);
-    const Colour kPresetRed     (0xffff2a2a);
-
+    // flashy, high-contrast LED colours (mode LED keeps the hue of its symbol)
+    const Colour kModeColours[3] = { Colour (0xff39ff2e),    // Delay  (green tree)
+                                     Colour (0xffff7b00),    // Auto Freeze (orange asterisk)
+                                     Colour (0xffff1238) };  // Layers (red rings)
+    const Colour kReverseColour (0xff00d5ff);
+    const Colour kPresetGreen   (0xff00ff66);
+    const Colour kPresetRed     (0xffff0040);
 
     double nowMs() { return Time::getMillisecondCounterHiRes(); }
 }
@@ -385,17 +388,12 @@ void TexturalAudioProcessorEditor::showMenu()
 //==============================================================================
 void TexturalAudioProcessorEditor::paint (Graphics& g)
 {
-    {
-        const auto b = getLocalBounds().toFloat();
-        ColourGradient bg (Colour (0xff2a2a2d), b.getCentreX(), b.getHeight() * 0.35f, Colour (0xff0e0e10), 0.0f, b.getBottom(), true);
-        g.setGradientFill (bg);
-        g.fillAll();
-    }
+    g.fillAll (Colours::black);
     g.addTransform (AffineTransform::scale (scale()));
 
     g.setImageResamplingQuality (Graphics::highResamplingQuality);
     g.setOpacity (1.0f);
-    g.drawImage (faceplate, Rectangle<float> (0, 0, kDesignW, kDesignH));
+    g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kDesignW - 2.0f * kPedalX, kDesignH));
 
     const Layer layer = currentLayer();
     const auto blink = [this] (double hz) { return std::fmod (phase * hz, 1.0) < 0.5; };
@@ -473,18 +471,13 @@ void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
         if (age > 1100.0) alpha = (float) (1.0 - (age - 1100.0) / 500.0);
     }
 
-    String txt = proc.describe (statusParam);
-    if (auto* prm = proc.param (statusParam))
-    {
-        const int cc = ccForParam (statusParam);
-        txt << "   |   " << (cc >= 0 ? "CC" + String (cc) + " " : String ("MIDI ")) << roundToInt (prm->getValue() * 127.0f);
-    }
+    const String txt = proc.describe (statusParam);
 
     // text takes the colour of the knob being turned
     const Colour col = kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212);
     g.setColour (col.withAlpha (alpha));
     g.setFont (FontOptions (24.0f, Font::bold));
-    g.drawFittedText (txt, Rectangle<int> (30, 872, 535, 34), Justification::centred, 1, 0.75f);
+    g.drawFittedText (txt, Rectangle<int> (232, 868, 521, 36), Justification::centred, 1, 0.75f);
 }
 
 //==============================================================================
@@ -520,25 +513,25 @@ void TexturalAudioProcessorEditor::drawLedLens (Graphics& g, Point<float> c, flo
     // fixed specular reflection (light from top-left) and a short bloom when lit.
     if (on > 0.01f)
     {
-        ColourGradient bloom (col.withAlpha (0.30f * on), c.x, c.y, col.withAlpha (0.0f), c.x + r * 1.45f, c.y, true);
+        ColourGradient bloom (col.withAlpha (0.62f * on), c.x, c.y, col.withAlpha (0.0f), c.x + r * 2.1f, c.y, true);
         g.setGradientFill (bloom);
-        g.fillEllipse (c.x - r * 1.45f, c.y - r * 1.45f, r * 2.9f, r * 2.9f);
+        g.fillEllipse (c.x - r * 2.1f, c.y - r * 2.1f, r * 4.2f, r * 4.2f);
     }
 
     const Colour offBody = diffused ? Colour (0xffdcd7ca) : col.darker (2.4f).withMultipliedSaturation (0.7f);
     const Colour body    = offBody.interpolatedWith (col, on);
     const Colour rim     = (diffused ? Colour (0xff8f8878) : col.darker (3.2f)).interpolatedWith (col.darker (0.9f), on);
-    ColourGradient lens (body.brighter (0.15f + 0.25f * on), c.x - r * 0.1f, c.y - r * 0.15f, rim, c.x + r, c.y + r * 0.2f, true);
+    ColourGradient lens (body.brighter (0.15f * (1.0f - on)).withMultipliedSaturation (1.0f + 0.3f * on), c.x - r * 0.1f, c.y - r * 0.15f, rim, c.x + r, c.y + r * 0.2f, true);
     g.setGradientFill (lens);
     g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
 
     // emitter die / hot core
     if (on > 0.01f)
     {
-        ColourGradient core (Colours::white.withAlpha (0.95f * on), c.x, c.y,
-                             col.brighter (0.6f).withAlpha (0.0f), c.x + r * 0.62f, c.y, true);
+        ColourGradient core (Colours::white.withAlpha (0.9f * on), c.x, c.y,
+                             col.withAlpha (0.0f), c.x + r * 0.42f, c.y, true);
         g.setGradientFill (core);
-        g.fillEllipse (c.x - r * 0.62f, c.y - r * 0.62f, r * 1.24f, r * 1.24f);
+        g.fillEllipse (c.x - r * 0.42f, c.y - r * 0.42f, r * 0.84f, r * 0.84f);
     }
     g.setColour ((on > 0.5f ? Colours::white : Colours::black).withAlpha (diffused ? 0.10f : 0.22f));
     g.fillRect (Rectangle<float> (r * 0.22f, r * 0.22f).withCentre (c));
@@ -576,7 +569,7 @@ void TexturalAudioProcessorEditor::drawRoundButton (Graphics& g, Point<float> c,
 void TexturalAudioProcessorEditor::drawStatusLed (Graphics& g, Point<float> c, float on) const
 {
     // the black rubber bezel comes from the photo; only the lens is drawn
-    drawLedLens (g, c, 20.5f, Colour (0xff2b9bff), on, false);
+    drawLedLens (g, c, 20.0f, Colour (0xff1e90ff), on, false);
 }
 
 void TexturalAudioProcessorEditor::drawFootswitch (Graphics& g, Point<float> c, bool pressed) const

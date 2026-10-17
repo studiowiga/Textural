@@ -23,71 +23,24 @@ inline bool isGlobalSetting (const juce::String& id)
 inline const std::vector<FactoryPreset>& factoryPresets()
 {
     static const std::vector<FactoryPreset> p {
-        // ---------------------------------------------------------------- GREEN
-        { "Glass Grotto",      // regenerative octave-up loops
-          { { PID::mode, 0 }, { PID::time, 0.58f }, { PID::size, 0.42f }, { PID::overlap, 0.42f },
-            { PID::regen, 0.72f }, { PID::pitch, 0.75f }, { PID::mix, 0.5f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.1f }, { PID::sizeRnd, 0.12f }, { PID::overlapRnd, 0.15f },
-            { PID::regenMix, 0.88f }, { PID::pitchRnd, 0.0f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.3f }, { PID::reverbDecay, 0.55f }, { PID::cutoff, 0.5f },
-            { PID::quantize, 0 }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
-
-        { "Kaleidoscope",      // frozen melodies replayed forward, reversed and at octaves
-          { { PID::mode, 1 }, { PID::time, 0.6f }, { PID::size, 0.38f }, { PID::overlap, 0.6f },
-            { PID::regen, 0.25f }, { PID::pitch, 0.5f }, { PID::mix, 0.55f }, { PID::reverse, 1 },
-            { PID::timeRnd, 0.45f }, { PID::sizeRnd, 0.3f }, { PID::overlapRnd, 0.3f },
-            { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.55f }, { PID::reverseRnd, 0.45f },
-            { PID::reverbMix, 0.4f }, { PID::reverbDecay, 0.6f }, { PID::cutoff, 0.5f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
-
-        { "Tidal Synth",       // warbly polyphonic synth
-          { { PID::mode, 2 }, { PID::time, 0.25f }, { PID::size, 0.22f }, { PID::overlap, 0.85f },
-            { PID::regen, 0.72f }, { PID::pitch, 0.5f }, { PID::mix, 0.68f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.0f }, { PID::sizeRnd, 0.08f }, { PID::overlapRnd, 0.1f },
-            { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.0f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.3f }, { PID::reverbDecay, 0.45f }, { PID::cutoff, 0.4f },
-            { PID::quantize, 0 }, { PID::vibRate, 0.5f }, { PID::vibDepth, 0.5f } } },
-
-        { "Halo Shimmer",      // granular shimmering reverb
-          { { PID::mode, 0 }, { PID::time, 0.35f }, { PID::size, 0.68f }, { PID::overlap, 0.82f },
-            { PID::regen, 0.78f }, { PID::pitch, 0.75f }, { PID::mix, 0.45f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.35f }, { PID::sizeRnd, 0.35f }, { PID::overlapRnd, 0.35f },
-            { PID::regenMix, 1.0f }, { PID::pitchRnd, 0.1f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.62f }, { PID::reverbDecay, 0.82f }, { PID::cutoff, 0.56f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.3f }, { PID::vibDepth, 0.12f } } },
-
-        // ------------------------------------------------------------------ RED
-        { "Glitch Stutter",    // short reversed blips, rhythmic chaos
-          { { PID::mode, 0 }, { PID::time, 0.42f }, { PID::size, 0.08f }, { PID::overlap, 0.18f },
-            { PID::regen, 0.45f }, { PID::pitch, 0.5f }, { PID::mix, 0.6f }, { PID::reverse, 1 },
-            { PID::timeRnd, 0.65f }, { PID::sizeRnd, 0.55f }, { PID::overlapRnd, 0.6f },
-            { PID::regenMix, 0.3f }, { PID::pitchRnd, 0.35f }, { PID::reverseRnd, 0.35f },
-            { PID::reverbMix, 0.18f }, { PID::reverbDecay, 0.3f }, { PID::cutoff, 0.62f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
-
-        { "Slow Horizon",      // slowly evolving pad with random octave blips
-          { { PID::mode, 2 }, { PID::time, 0.78f }, { PID::size, 0.65f }, { PID::overlap, 0.78f },
-            { PID::regen, 0.86f }, { PID::pitch, 0.5f }, { PID::mix, 0.6f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.2f }, { PID::sizeRnd, 0.3f }, { PID::overlapRnd, 0.3f },
-            { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.3f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.55f }, { PID::reverbDecay, 0.78f }, { PID::cutoff, 0.42f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.25f }, { PID::vibDepth, 0.1f } } },
-
-        { "Sub Ripple",        // quickly cascading sub-octave
-          { { PID::mode, 0 }, { PID::time, 0.22f }, { PID::size, 0.18f }, { PID::overlap, 0.38f },
-            { PID::regen, 0.62f }, { PID::pitch, 0.25f }, { PID::mix, 0.5f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.1f }, { PID::sizeRnd, 0.1f }, { PID::overlapRnd, 0.12f },
-            { PID::regenMix, 0.92f }, { PID::pitchRnd, 0.0f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.15f }, { PID::reverbDecay, 0.4f }, { PID::cutoff, 0.38f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
-
-        { "Velvet Cello",      // sub-octave pad with vibrato
-          { { PID::mode, 1 }, { PID::time, 0.55f }, { PID::size, 0.55f }, { PID::overlap, 0.72f },
-            { PID::regen, 0.2f }, { PID::pitch, 0.25f }, { PID::mix, 0.6f }, { PID::reverse, 0 },
-            { PID::timeRnd, 0.25f }, { PID::sizeRnd, 0.2f }, { PID::overlapRnd, 0.2f },
-            { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.0f }, { PID::reverseRnd, 0.5f },
-            { PID::reverbMix, 0.32f }, { PID::reverbDecay, 0.6f }, { PID::cutoff, 0.33f },
-            { PID::quantize, 1 }, { PID::vibRate, 0.42f }, { PID::vibDepth, 0.38f } } },
+        // ---------------------------------------------------------------- GREEN (1-4)
+        { "Crystal Cascade",   // octave-up granular regen falling into a lush shimmer
+          { { PID::mode, 0.0f }, { PID::time, 0.56f }, { PID::size, 0.46f }, { PID::overlap, 0.62f }, { PID::regen, 0.8f }, { PID::pitch, 0.75f }, { PID::mix, 0.55f }, { PID::reverse, 0.0f }, { PID::timeRnd, 0.12f }, { PID::sizeRnd, 0.2f }, { PID::overlapRnd, 0.2f }, { PID::regenMix, 0.92f }, { PID::pitchRnd, 0.12f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.55f }, { PID::reverbDecay, 0.8f }, { PID::cutoff, 0.55f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.3f }, { PID::vibDepth, 0.06f } } },
+        { "Particle Rain",   // sparkling particle cloud, reversed dust, octaves
+          { { PID::mode, 0.0f }, { PID::time, 0.5f }, { PID::size, 0.12f }, { PID::overlap, 0.55f }, { PID::regen, 0.55f }, { PID::pitch, 0.5f }, { PID::mix, 0.88f }, { PID::reverse, 1.0f }, { PID::timeRnd, 0.42f }, { PID::sizeRnd, 0.6f }, { PID::overlapRnd, 0.6f }, { PID::regenMix, 0.6f }, { PID::pitchRnd, 0.62f }, { PID::reverseRnd, 0.45f }, { PID::reverbMix, 0.6f }, { PID::reverbDecay, 0.84f }, { PID::cutoff, 0.6f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
+        { "Nebula Pad",   // detuned polyphonic synth pad, slow swell, endless hall
+          { { PID::mode, 2.0f }, { PID::time, 0.72f }, { PID::size, 0.45f }, { PID::overlap, 0.9f }, { PID::regen, 0.93f }, { PID::pitch, 0.5f }, { PID::mix, 0.7f }, { PID::reverse, 0.0f }, { PID::timeRnd, 0.0f }, { PID::sizeRnd, 0.1f }, { PID::overlapRnd, 0.12f }, { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.3f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.62f }, { PID::reverbDecay, 0.9f }, { PID::cutoff, 0.38f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.22f }, { PID::vibDepth, 0.12f } } },
+        { "Tenor Sax",   // breathy swell, nasal resonant tone and 5 Hz vibrato
+          { { PID::mode, 2.0f }, { PID::time, 0.38f }, { PID::size, 0.22f }, { PID::overlap, 0.86f }, { PID::regen, 0.78f }, { PID::pitch, 0.5f }, { PID::mix, 0.6f }, { PID::reverse, 0.0f }, { PID::timeRnd, 0.0f }, { PID::sizeRnd, 0.05f }, { PID::overlapRnd, 0.08f }, { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.07f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.24f }, { PID::reverbDecay, 0.45f }, { PID::cutoff, 0.3f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.85f }, { PID::vibDepth, 0.45f } } },
+        // ------------------------------------------------------------------ RED (5-8)
+        { "Pure Reverse",   // 100 % backwards: every grain reversed, wet only
+          { { PID::mode, 0.0f }, { PID::time, 0.65f }, { PID::size, 0.76f }, { PID::overlap, 0.36f }, { PID::regen, 0.38f }, { PID::pitch, 0.5f }, { PID::mix, 1.0f }, { PID::reverse, 1.0f }, { PID::timeRnd, 0.0f }, { PID::sizeRnd, 0.0f }, { PID::overlapRnd, 0.05f }, { PID::regenMix, 0.0f }, { PID::pitchRnd, 0.0f }, { PID::reverseRnd, 1.0f }, { PID::reverbMix, 0.22f }, { PID::reverbDecay, 0.55f }, { PID::cutoff, 0.5f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
+        { "Glitch Engine",   // stuttering micro-slices, random repeats and pitch jumps
+          { { PID::mode, 0.0f }, { PID::time, 0.46f }, { PID::size, 0.06f }, { PID::overlap, 0.3f }, { PID::regen, 0.55f }, { PID::pitch, 0.5f }, { PID::mix, 0.8f }, { PID::reverse, 1.0f }, { PID::timeRnd, 0.85f }, { PID::sizeRnd, 0.72f }, { PID::overlapRnd, 0.75f }, { PID::regenMix, 0.4f }, { PID::pitchRnd, 0.55f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.15f }, { PID::reverbDecay, 0.4f }, { PID::cutoff, 0.6f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.35f }, { PID::vibDepth, 0.0f } } },
+        { "Tape Echoes",   // warm ping-pong tape delay with wow and dark repeats
+          { { PID::mode, 0.0f }, { PID::time, 0.6f }, { PID::size, 0.9f }, { PID::overlap, 0.9f }, { PID::regen, 0.72f }, { PID::pitch, 0.5f }, { PID::mix, 0.5f }, { PID::reverse, 0.0f }, { PID::timeRnd, 0.0f }, { PID::sizeRnd, 0.04f }, { PID::overlapRnd, 0.05f }, { PID::regenMix, 0.0f }, { PID::pitchRnd, 0.04f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.3f }, { PID::reverbDecay, 0.6f }, { PID::cutoff, 0.36f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.3f }, { PID::vibDepth, 0.32f } } },
+        { "Frozen Cathedral",   // auto-frozen chords with octaves in an infinite reverb
+          { { PID::mode, 1.0f }, { PID::time, 0.62f }, { PID::size, 0.62f }, { PID::overlap, 0.85f }, { PID::regen, 0.3f }, { PID::pitch, 0.5f }, { PID::mix, 0.68f }, { PID::reverse, 0.0f }, { PID::timeRnd, 0.3f }, { PID::sizeRnd, 0.3f }, { PID::overlapRnd, 0.3f }, { PID::regenMix, 0.5f }, { PID::pitchRnd, 0.42f }, { PID::reverseRnd, 0.5f }, { PID::reverbMix, 0.66f }, { PID::reverbDecay, 1.0f }, { PID::cutoff, 0.44f }, { PID::quantize, 1.0f }, { PID::vibRate, 0.2f }, { PID::vibDepth, 0.08f } } },
     };
     return p;
 }

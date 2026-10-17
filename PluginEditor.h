@@ -29,7 +29,8 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
-    static constexpr float kDesignW = 595.0f;
+    static constexpr float kSideMargin = 100.0f * 1000.0f / 493.0f;   // 100 px each side at default size
+    static constexpr float kDesignW = 1058.0f * 1000.0f / 1805.0f + 2.0f * kSideMargin;
     static constexpr float kDesignH = 1000.0f;
     static constexpr int   kDefaultH = 493;
 

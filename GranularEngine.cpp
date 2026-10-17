@@ -45,6 +45,7 @@ void GranularEngine::reset()
     spawnCounter = 0;
     fbPrevL = fbPrevR = 0;
     fbEnv = 0;
+    particleCounter = 0; haveLast = false; wowPhase = 0;
     fbLpL = fbLpR = fbHpL = fbHpR = 0;
     writePos = 0;
     frozen = false;
@@ -56,11 +57,15 @@ float GranularEngine::grainRatio (const EngineParams& p)
     float semis = Map::pitchSemis (p.pitch);
     if (p.quantize) semis = Map::quantiseSemis (semis);
 
-    // PITCH RANDOM: how much and how often grains jump to harmonically related intervals
-    if (p.pitchRnd > 0.001f && rnd() < p.pitchRnd * 0.85f)
+    // PITCH RANDOM, first third: unison detune (supersaw-like synth thickness, up to +/-30 cents)
+    const float detune = juce::jmin (p.pitchRnd, 0.33f) / 0.33f;
+    semis += brnd() * 0.30f * detune;
+    // beyond: grains jump more and more often to harmonically related intervals
+    const float jump = juce::jmax (0.0f, (p.pitchRnd - 0.33f) / 0.67f);
+    if (jump > 0.001f && rnd() < jump * 0.85f)
     {
         static const float intervals[] = { 12, -12, 7, -5, 19, 24, -24 };
-        const int count = juce::jlimit (2, 7, 2 + (int) (p.pitchRnd * 5.99f));
+        const int count = juce::jlimit (2, 7, 2 + (int) (jump * 5.99f));
         semis += intervals[(int) (rnd() * (float) count) % count];
     }
     semis = juce::jlimit (-36.0f, 36.0f, semis);
@@ -79,16 +84,28 @@ void GranularEngine::spawnGrain (const EngineParams& p, int source, double sourc
     const float rate    = grainRatio (p);
     const double span   = (double) len * rate;
 
-    const double end   = sourceEnd - (double) (rnd() * jitter);
-    const double start = end - span;
+    double end   = sourceEnd - (double) (rnd() * jitter);
+    double start = end - span;
+    int    glen  = len;
+    float  grate = rate;
+    // GLITCH: high TIME RANDOM makes some grains re-fire the previous slice (stutter / repeat)
+    if (source < 0 && haveLast && p.timeRnd > 0.45f && rnd() < (p.timeRnd - 0.45f) * 0.9f)
+    {
+        start = lastStart;
+        glen  = juce::jmax (64, (int) ((float) lastLen * (rnd() < 0.5f ? 0.5f : 1.0f)));
+        grate = lastRate;
+        end   = start + (double) glen * grate;
+    }
+    lastStart = start; lastLen = glen; lastRate = grate; haveLast = source < 0;
     const bool   rev   = p.reverse && rnd() < Map::reverseProbability (p.reverseRnd);
 
     g->active = true;
     g->source = source;
-    g->length = len;
+    g->length = glen;
     g->age    = 0;
-    g->inc    = rev ? -rate : rate;
+    g->inc    = rev ? -grate : grate;
     g->pos    = rev ? end : start;
+    g->amp    = 1.0f;
 
     const float norm = 1.0f / std::pow (juce::jmax (1.0f, 0.75f * density), 0.75f);
     if (p.stereo)
@@ -102,6 +119,52 @@ void GranularEngine::spawnGrain (const EngineParams& p, int source, double sourc
     {
         g->gL = g->gR = norm;
     }
+}
+
+// MIX above 60 % sprays a cloud of tiny "particle" grains (10-45 ms), scattered in time,
+// randomly panned and sometimes thrown up an octave or a twelfth: granular dust and sparkle.
+void GranularEngine::spawnParticle (const EngineParams& p)
+{
+    Grain* g = nullptr;
+    for (auto& cand : grains) if (! cand.active) { g = &cand; break; }
+    if (g == nullptr) return;
+
+    int source = -1;
+    double end;
+    if (p.mode == Mode::Layers)
+    {
+        int cand[kLayers], n = 0;
+        for (int i = 0; i < kLayers; ++i)
+            if (layers[(size_t) i].stage != Layer::Off && layers[(size_t) i].length > 0) cand[n++] = i;
+        if (n == 0) return;
+        source = cand[(int) (rnd() * (float) n) % n];
+        end = (double) layers[(size_t) source].length * (0.2 + 0.8 * rnd());
+    }
+    else if (p.mode == Mode::AutoFreeze && afHasSegment)
+        end = (double) afSegStart + (double) afSegLen * (0.15 + 0.85 * rnd());
+    else
+        end = (double) writePos - sr * (0.02 + 1.6 * rnd());
+
+    const int len = (int) ((0.010f + 0.035f * rnd()) * (float) sr);
+    float semis = Map::pitchSemis (p.pitch);
+    if (p.quantize) semis = Map::quantiseSemis (semis);
+    // sparkle (octave / twelfth) follows PITCH RANDOM, direction follows REVERSE
+    const float r = rnd() / juce::jmax (0.001f, juce::jmin (1.0f, p.pitchRnd * 3.0f));
+    if (r < 0.30f) semis += 12.0f; else if (r < 0.42f) semis += 19.0f; else if (r < 0.48f) semis += 24.0f;
+    const float rate = std::exp2 (juce::jlimit (-36.0f, 36.0f, semis) / 12.0f);
+    const bool rev = p.reverse ? rnd() < Map::reverseProbability (p.reverseRnd) : rnd() < 0.2f;
+
+    g->active = true;
+    g->source = source;
+    g->length = len;
+    g->age    = 0;
+    g->inc    = rev ? -rate : rate;
+    g->pos    = rev ? end : end - (double) len * rate;
+    const float pan = brnd();
+    const float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    g->gL = std::cos (a) * 1.41421356f;
+    g->gR = std::sin (a) * 1.41421356f;
+    g->amp = 0.42f;
 }
 
 bool GranularEngine::detectOnset (float x)
@@ -168,6 +231,12 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
     const float density      = Map::overlapCount (p.overlap);
     const float fbComp       = std::pow (juce::jmax (1.0f, 0.75f * density), 0.35f);
     const float sizeSec      = Map::sizeSeconds (p.size, p.mode);
+    // repeats get darker (filter knob < noon, analog/tape echo) or thinner (> noon, lo-fi)
+    const float toneLP       = p.cutoff < 0.5f ? 1800.0f * std::pow (10000.0f / 1800.0f, p.cutoff / 0.5f) : 10000.0f;
+    const float toneHP       = p.cutoff > 0.5f ? 70.0f * std::pow (900.0f / 70.0f, (p.cutoff - 0.5f) / 0.5f) : 70.0f;
+    const float lpC          = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneLP / (float) sr);
+    const float hpC          = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneHP / (float) sr);
+    const float particles    = juce::jlimit (0.0f, 1.0f, (p.mix - 0.6f) / 0.4f);
     const bool  unfreezeHeld = p.mode == Mode::AutoFreeze && p.freeze;
 
     const float attackInc    = 1.0f / (Map::timeSeconds (p.time, Mode::Layers) * (float) sr);
@@ -200,15 +269,20 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
             float wl = inL, wr = inR;
             if (p.mode != Mode::Layers && fb > 0.0f)
             {
-                const double rp = (double) writePos - (double) timeSmooth * sr;
-                const float dl = hermite (bufL.data(), bufLen, rp);
-                const float dr = hermite (bufR.data(), bufLen, rp);
+                // tape wow on the repeats follows the vibrato depth
+                wowPhase += 0.55f / (float) sr; if (wowPhase >= 1.0f) wowPhase -= 1.0f;
+                const double wow = (double) (p.vibDepth * 0.0025f * (float) sr
+                                             * (0.5f + 0.5f * std::sin (juce::MathConstants<float>::twoPi * wowPhase)));
+                const double rp = (double) writePos - (double) timeSmooth * sr - wow;
+                float dl = hermite (bufL.data(), bufLen, rp);
+                float dr = hermite (bufR.data(), bufLen, rp);
+                if (p.stereo) std::swap (dl, dr);       // stereo output: repeats ping-pong L <-> R
                 float fl = fbDelay * dl + fbGrain * fbPrevL;
                 float fr = fbDelay * dr + fbGrain * fbPrevR;
                 // tone of the regeneration path: gentle high cut + DC/rumble blocker,
                 // so cascading octaves fade naturally like on hardware
-                fbLpL += fbLpCoef * (fl - fbLpL);  fbLpR += fbLpCoef * (fr - fbLpR);
-                fbHpL += fbHpCoef * (fbLpL - fbHpL); fbHpR += fbHpCoef * (fbLpR - fbHpR);
+                fbLpL += lpC * (fl - fbLpL);  fbLpR += lpC * (fr - fbLpR);
+                fbHpL += hpC * (fbLpL - fbHpL); fbHpR += hpC * (fbLpR - fbHpR);
                 fl = fbLpL - fbHpL;  fr = fbLpR - fbHpR;
                 // feedback level control: lets REGEN self-sustain without running away
                 const float pk = juce::jmax (std::abs (fl), std::abs (fr));
@@ -299,12 +373,20 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
             }
         }
 
+        //------------------------------------------------------------ particles
+        if (particles > 0.0f && (particleCounter -= 1.0) <= 0.0)
+        {
+            spawnParticle (p);
+            const double rate = 4.0 + 46.0 * particles;          // up to ~50 particles / s
+            particleCounter = sr / rate * (0.3 + 1.4 * rnd());
+        }
+
         //--------------------------------------------------------- render grains
         float sumL = 0, sumR = 0;
         for (auto& g : grains)
         {
             if (! g.active) continue;
-            float w = window ((float) g.age / (float) g.length);
+            float w = window ((float) g.age / (float) g.length) * g.amp;
             float sL, sR;
             if (g.source < 0)
             {

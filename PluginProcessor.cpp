@@ -195,6 +195,9 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     ep.stereo     = outMode == OutMode::Stereo;
     ep.tapSpacing = tapSpacing.load();
     ep.inputMuted = ! engaged && trails;
+    ep.mix        = value (PID::mix);
+    ep.cutoff     = value (PID::cutoff);
+    ep.vibDepth   = value (PID::vibDepth);
 
     // bypass without trails: fade out, then mute and clear
     const bool processFx = engaged || trails || engageFade > 0.0f;
@@ -214,6 +217,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     outGain.setTargetValue (Decibels::decibelsToGain (Map::outputDb (value (PID::outputGain))));
     filter.setKnob (value (PID::cutoff));
     vibrato.set (Map::vibratoHz (value (PID::vibRate)), Map::vibratoMs (value (PID::vibDepth)));
+    reverb.setTone (value (PID::cutoff));
     reverb.setDecay (Map::reverbRT60 (value (PID::reverbDecay)));
 
     const float fadeStep = 1.0f / (0.015f * (float) sr);
@@ -226,6 +230,11 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
 
         float wL = wl[i], wR = wr[i];
         vibrato.process (wL, wR);
+        if (ep.mode == Mode::Layers)   // warm analog-synth style saturation on the layered voices
+        {
+            wL = std::tanh (1.8f * wL) * 0.62f;
+            wR = std::tanh (1.8f * wR) * 0.62f;
+        }
         // wet-bus level control (keeps dense / regenerating textures musical)
         const float wpk = jmax (std::abs (wL), std::abs (wR));
         wetEnv += (wpk > wetEnv ? 0.01f : 0.00008f) * (wpk - wetEnv);
@@ -468,15 +477,16 @@ String TexturalAudioProcessor::describe (const String& id) const
         if (value (PID::quantize) > 0.5f) s = Map::quantiseSemis (s);
         return "PITCH " + String (s > 0 ? "+" : "") + String (s, 1) + " st";
     }
-    if (id == PID::mix)        return "MIX " + pc (v);
+    if (id == PID::mix)        return "MIX " + pc (v) + (v > 0.6f ? "  +PARTICLES " + pc ((v - 0.6f) / 0.4f) : String());
     if (id == PID::timeRnd)    return "TIME RND " + pc (v);
     if (id == PID::sizeRnd)    return "SIZE RND " + pc (v);
     if (id == PID::overlapRnd) return "OVERLAP RND " + pc (v);
     if (id == PID::regenMix)   return "REGEN MIX " + String (roundToInt ((1.0f - v) * 100)) + "/" + String (roundToInt (v * 100)) + " DLY/GRN";
-    if (id == PID::pitchRnd)   return "PITCH RND " + pc (v);
+    if (id == PID::pitchRnd)   return v <= 0.33f ? "DETUNE " + String (roundToInt (v / 0.33f * 30.0f)) + " cents"
+                                                 : "PITCH RND " + pc ((v - 0.33f) / 0.67f);
     if (id == PID::reverseRnd) return "REVERSE RND " + pc (Map::reverseProbability (v));
     if (id == PID::reverbMix)  return "REVERB MIX " + pc (v);
-    if (id == PID::reverbDecay)return "REVERB DECAY " + secs (Map::reverbRT60 (v));
+    if (id == PID::reverbDecay)return v >= 0.97f ? String ("REVERB DECAY INFINITE") : "REVERB DECAY " + secs (Map::reverbRT60 (v));
     if (id == PID::cutoff)
     {
         if (std::abs (v - 0.5f) < 0.015f) return String ("FILTER FLAT");

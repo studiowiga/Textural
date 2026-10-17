@@ -30,7 +30,7 @@ Moteur de synthèse granulaire inspiré de la pédale MXR Textures M310 : trois 
 - **Ctrl + Alt + glisser** (ou clic sur la LED bleue) : Preset Scroll Mute, Trails, Output Mode, Footswitch Hold Mode, Output Gain.
 - **Tap tempo** : Ctrl + clic sur MODE (ou REVERSE verrouillé puis clic sur MODE), ou CC83.
 
-La ligne d'état sous « Textural » affiche les 6 valeurs MIDI (0-127) de la couche active, puis la valeur réelle du dernier réglage touché et son CC.
+La ligne d'état sous « Textural » n'affiche que le réglage du potard en cours de rotation, dans la couleur du potard.
 
 ## MIDI
 
@@ -56,7 +56,17 @@ Program Change 0 = Live, 1-8 = presets. Tous les paramètres sont aussi automati
 
 ## Presets d'usine
 
-Verts : 1 Glass Grotto (boucles d'octave régénérées) · 2 Kaleidoscope (Auto Freeze, inversé, octaves aléatoires) · 3 Tidal Synth (Layers polyphonique avec vibrato) · 4 Halo Shimmer (shimmer granulaire).
-Rouges : 5 Glitch Stutter (micro-grains inversés) · 6 Slow Horizon (nappe à attaque lente) · 7 Sub Ripple (cascade sub-octave) · 8 Velvet Cello (nappe sub-octave avec vibrato).
+Verts : 1 Crystal Cascade (cascade d'octaves dans un shimmer) · 2 Particle Rain (nuage de particules) · 3 Nebula Pad (nappe synthé désaccordée) · 4 Tenor Sax (attaque soufflée, résonance nasale, vibrato 5 Hz).
+Rouges : 5 Pure Reverse (100 % inversé, wet seul, particules inversées) · 6 Glitch Engine (micro-tranches, répétitions, sauts d'octave) · 7 Tape Echoes (écho bande ping-pong avec wow) · 8 Frozen Cathedral (accords gelés dans une reverb infinie).
+
+## Fonctions cachées (sans boutons supplémentaires)
+
+- **MIX au-delà de 60 %** : ajoute progressivement un nuage de particules granulaires (grains de 10 à 45 ms, panoramiques aléatoires, à l'octave ou à la douzième selon Pitch Random, inversés selon Reverse).
+- **Pitch Random** : le premier tiers donne un désaccord « unisson » façon synthé (jusqu'à ±30 cents). Au-delà, les grains sautent d'intervalle harmonique.
+- **Time Random au-delà de 45 %** : effet glitch, certains grains rejouent la tranche précédente (stutter).
+- **Delay** : en sortie Stéréo, les répétitions font du ping-pong. Le filtre colore les répétitions : sous midi, écho analogique sombre ; au-dessus, son lo-fi aminci. Vibrato Depth ajoute un wow de bande sur les répétitions.
+- **Reverb** : queue modulée et diffuse. Reverb Decay va de 0,4 s à 60 s puis passe en infini en fin de course. Le filtre éclaircit ou assombrit la queue.
+- **Filtre** : la résonance augmente quand on s'éloigne de midi, ce qui donne des balayages façon synthé.
+- **Mode Layers** : saturation douce de type synthé analogique.
 
 Les presets utilisateur sont enregistrés dans le projet du DAW et dans `%APPDATA%\Studio Wiga\Textural\UserPresets.xml`.

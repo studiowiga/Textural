@@ -64,7 +64,9 @@ private:
         float fc;
         if (! isHP) fc = 180.0f * std::pow (20000.0f / 180.0f, k / 0.5f);           // 180 Hz .. 20 kHz
         else        fc = 20.0f  * std::pow (4000.0f / 20.0f, (k - 0.5f) / 0.5f);    // 20 Hz .. 4 kHz
-        for (auto& c : st) { c[0].set (fc, sr, 0.5412f); c[1].set (fc, sr, 1.3066f); } // Butterworth 4th order
+        // resonance grows as the knob leaves noon: synth-like sweeps
+        const float res = 1.3066f + 3.2f * std::pow (std::abs (k - 0.5f) * 2.0f, 1.5f);
+        for (auto& c : st) { c[0].set (fc, sr, 0.5412f); c[1].set (fc, sr, res); }
     }
     float run (size_t ch, float x)
     {
@@ -129,28 +131,35 @@ private:
 };
 
 //==============================================================================
-// 8-line feedback delay network with input diffusion and damping
+// Lush "ambient" FDN reverb: 8 modulated delay lines (chorused tail), 6-stage
+// input diffusion (bloom), damping linked to the dual filter, infinite hold at
+// the top of the Reverb Decay range.
 class FDNReverb
 {
 public:
     void prepare (double sampleRate)
     {
         sr = (float) sampleRate;
-        static const float ms[8] = { 31.7f, 37.9f, 43.3f, 49.1f, 56.3f, 63.7f, 71.9f, 79.3f };
+        static const float ms[8] = { 43.1f, 53.7f, 61.9f, 73.3f, 83.9f, 97.1f, 109.7f, 127.3f };
+        maxMod = (int) (0.0035f * sr) + 4;
         for (int i = 0; i < 8; ++i)
         {
             len[i] = (int) (ms[i] * 0.001f * sr);
-            line[i].assign ((size_t) len[i] + 1, 0.0f);
+            size[i] = len[i] + maxMod + 4;
+            line[i].assign ((size_t) size[i], 0.0f);
             pos[i] = 0;
             lp[i] = 0;
+            lfo[i] = (float) i * 0.37f;
+            lfoInc[i] = (0.11f + 0.047f * (float) i) / sr;
         }
-        static const float apMs[4] = { 4.77f, 3.59f, 12.73f, 9.31f };
-        for (int i = 0; i < 4; ++i)
+        static const float apMs[6] = { 4.77f, 3.59f, 12.73f, 9.31f, 23.1f, 17.9f };
+        for (int i = 0; i < 6; ++i)
         {
             apLen[i] = (int) (apMs[i] * 0.001f * sr);
             ap[i].assign ((size_t) apLen[i] + 1, 0.0f);
             apPos[i] = 0;
         }
+        currentRT = -1;
         setDecay (3.0f);
     }
 
@@ -161,25 +170,32 @@ public:
         for (auto& v : lp) v = 0;
     }
 
+    // tone: 0 = dark, 0.5 = neutral, 1 = bright
+    void setTone (float t) { tone = juce::jlimit (0.0f, 1.0f, t); currentRT = -1; }
+
     void setDecay (float rt60)
     {
         if (std::abs (rt60 - currentRT) < 0.01f) return;
         currentRT = rt60;
+        infinite = rt60 > 100.0f;
         for (int i = 0; i < 8; ++i)
-            gain[i] = std::pow (10.0f, -3.0f * (float) len[i] / (rt60 * sr));
-        damp = juce::jlimit (0.05f, 0.6f, 0.45f - 0.02f * rt60);
-        outScale = 1.0f / std::sqrt (1.0f + 0.25f * rt60);
+            gain[i] = infinite ? 0.99985f : std::pow (10.0f, -3.0f * (float) len[i] / (rt60 * sr));
+        const float baseDamp = infinite ? 0.55f : juce::jlimit (0.12f, 0.75f, 0.6f - 0.012f * rt60);
+        damp = juce::jlimit (0.06f, 0.95f, baseDamp * (0.45f + 1.1f * tone));
+        modDepth = juce::jlimit (0.0f, (float) maxMod - 2.0f, (0.0008f + 0.00004f * juce::jmin (rt60, 60.0f)) * sr);
+        outScale = 1.0f / std::sqrt (1.0f + 0.22f * juce::jmin (rt60, 25.0f));
     }
 
     void process (float inL, float inR, float& outL, float& outR)
     {
         float x = 0.5f * (inL + inR);
-        for (int i = 0; i < 4; ++i)  // series all-pass diffusion
+        for (int i = 0; i < 6; ++i)  // series all-pass diffusion (bloom)
         {
             auto& b = ap[i];
             const float d = b[(size_t) apPos[i]];
-            const float y = -0.6f * x + d;
-            b[(size_t) apPos[i]] = x + 0.6f * y;
+            const float g = i < 4 ? 0.62f : 0.5f;
+            const float y = -g * x + d;
+            b[(size_t) apPos[i]] = x + g * y;
             if (++apPos[i] >= apLen[i]) apPos[i] = 0;
             x = y;
         }
@@ -187,33 +203,42 @@ public:
         float o[8];
         for (int i = 0; i < 8; ++i)
         {
-            float v = line[i][(size_t) pos[i]];
-            lp[i] += damp * (v - lp[i]);   // simple damping one-pole
+            lfo[i] += lfoInc[i]; if (lfo[i] >= 1.0f) lfo[i] -= 1.0f;
+            const float m = modDepth * (0.5f + 0.5f * std::sin (juce::MathConstants<float>::twoPi * lfo[i]));
+            float rp = (float) pos[i] - (float) len[i] - m;
+            while (rp < 0) rp += (float) size[i];
+            const int i0 = (int) rp % size[i];
+            const int i1 = (i0 + 1) % size[i];
+            const float f = rp - std::floor (rp);
+            const float v = line[i][(size_t) i0] + f * (line[i][(size_t) i1] - line[i][(size_t) i0]);
+            lp[i] += damp * (v - lp[i]);
             o[i] = lp[i] * gain[i];
         }
-        // Hadamard 8x8 (fast transform) - energy preserving mixing
         float h[8];
         for (int i = 0; i < 8; ++i) h[i] = o[i];
-        for (int s = 1; s < 8; s <<= 1)
-            for (int i = 0; i < 8; i += s << 1)
-                for (int j = i; j < i + s; ++j)
+        for (int st = 1; st < 8; st <<= 1)
+            for (int i = 0; i < 8; i += st << 1)
+                for (int j = i; j < i + st; ++j)
                 {
-                    const float a = h[j], b = h[j + s];
-                    h[j] = a + b; h[j + s] = a - b;
+                    const float a = h[j], b = h[j + st];
+                    h[j] = a + b; h[j + st] = a - b;
                 }
         const float norm = 0.35355339f;
+        const float inG = infinite ? 0.02f : 1.0f;   // infinite: tail holds, new input barely enters
         for (int i = 0; i < 8; ++i)
         {
-            line[i][(size_t) pos[i]] = h[i] * norm + x * ((i & 1) ? 0.3f : -0.3f) + (i < 4 ? inL : inR) * 0.12f;
-            if (++pos[i] >= len[i]) pos[i] = 0;
+            float w = h[i] * norm + inG * (x * ((i & 1) ? 0.3f : -0.3f) + (i < 4 ? inL : inR) * 0.12f);
+            line[i][(size_t) pos[i]] = w;
+            if (++pos[i] >= size[i]) pos[i] = 0;
         }
         outL = (o[0] - o[2] + o[4] - o[6]) * 0.6f * outScale;
         outR = (o[1] - o[3] + o[5] - o[7]) * 0.6f * outScale;
     }
 
 private:
-    std::vector<float> line[8], ap[4];
-    int len[8] {}, pos[8] {}, apLen[4] {}, apPos[4] {};
-    float gain[8] {}, lp[8] {};
-    float sr = 44100, damp = 0.3f, currentRT = -1, outScale = 1.0f;
+    std::vector<float> line[8], ap[6];
+    int len[8] {}, size[8] {}, pos[8] {}, apLen[6] {}, apPos[6] {}, maxMod = 8;
+    float gain[8] {}, lp[8] {}, lfo[8] {}, lfoInc[8] {};
+    float sr = 44100, damp = 0.3f, currentRT = -1, outScale = 1.0f, modDepth = 0.0f, tone = 0.5f;
+    bool infinite = false;
 };

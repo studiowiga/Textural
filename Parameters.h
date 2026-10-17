@@ -91,7 +91,7 @@ namespace Map
     inline float wetGain (float k)               { return juce::jmin (1.0f, 2.0f * k); }
 
     inline float reverseProbability (float k)    { return 0.1f + 0.9f * k; }
-    inline float reverbRT60 (float k)            { return 0.3f * std::pow (60.0f, k); }
+    inline float reverbRT60 (float k)            { return k >= 0.97f ? 1.0e6f : 0.4f * std::pow (150.0f, k / 0.97f); }   // 0.4 s .. 60 s, then infinite
     inline float vibratoHz (float k)             { return 0.1f * std::pow (100.0f, k); }
     inline float vibratoMs (float k)             { return 6.0f * k * k; }
     inline float outputDb (float k)              { return (k - 0.5f) * 24.0f; }
