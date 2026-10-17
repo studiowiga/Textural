@@ -429,6 +429,7 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
     g.setOpacity (1.0f);
     // black backdrop with a faint echo of the pedal's granular wave pattern
     g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH));
+    g.addTransform (pedalTransform());          // everything below belongs to the pedal
     g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kDesignW - 2.0f * kPedalX, kDesignH));
 
     const Layer layer = currentLayer();

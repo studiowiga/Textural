@@ -79,7 +79,7 @@ TexturalAudioProcessor::TexturalAudioProcessor()
 
 const String TexturalAudioProcessor::getProgramName (int index)
 {
-    return presetName (index);
+    return presetName (juce::jlimit (0, 8, index) + 1);
 }
 
 String TexturalAudioProcessor::presetName (int index) const
@@ -219,7 +219,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
 
     // REVERSE REVERB: with REVERSE on, the reverb is also placed before the grains,
     // so reversed grains replay reverb tails backwards (swelling "reverse reverb").
-    preAmt.setTargetValue (ep.reverse ? 0.5f * value (PID::reverbMix) : 0.0f);   // guitar stays defined
+    preAmt.setTargetValue (0.0f);   // reverse plays the recorded guitar itself backwards (no pre-reverb)
     preReverb.setTone (value (PID::cutoff));
     preReverb.setDecay (jmin (12.0f, Map::reverbRT60 (value (PID::reverbDecay))));
     {

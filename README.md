@@ -42,7 +42,7 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
-Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
+Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
 |---|---|---|---|
@@ -74,7 +74,7 @@ Verts :
 
 Rouges :
 5. Obligatory Shimmer : Regen Mix 83/17 delay/granulaire.
-6. Reverse Reverb : la guitare jouée à l'envers dans une reverb.
+6. Reverse Reverb : écho inversé, chaque tranche d'environ 0,9 s de guitare est rejouée à l'envers puis passe dans la reverb.
 7. Mellow Cello : nappe une octave plus bas avec vibrato, plus présente après la note.
 8. Stardust Cloud : synthé granulaire en Layers avec une pluie de particules.
 
@@ -85,7 +85,7 @@ Rouges :
 - **Grains** : enveloppe en cosinus qui s'adapte à OVERLAP (Hann quand les grains se chevauchent, fondu de 20 % au minimum), si bien que deux grains successifs se recouvrent toujours.
 - **Alignement de phase (type WSOLA)** : quand les grains sont peu nombreux, chaque nouveau grain est décalé de ±12 ms pour être en phase avec ceux qui jouent déjà, et le niveau est normalisé par la somme des fenêtres. Un son tenu garde ainsi un niveau constant, sans creux ni décrochage, y compris en reverse.
 - **Reverse** : les grains inversés ne lisent que de l'audio déjà enregistré et ne croisent jamais la tête d'écriture, donc aucun clic.
-- **Reverse reverb** : avec REVERSE actif, une partie de la reverb (la moitié de Reverb Mix) est placée avant les grains, qui rejouent donc des queues de reverb à l'envers.
+- **Reverse** : avec TIME au minimum et OVERLAP bas, c'est un écho inversé classique : la dernière tranche jouée (longueur = SIZE) est rejouée à l'envers, avec un court fondu entre les tranches.
 - **Diffuseur** : un réseau de filtres passe-tout, sur le principe de Mutable Instruments Clouds, fond les grains en nappe quand OVERLAP est élevé.
 - **Reverb** : plate de Dattorro modulée, de la petite pièce jusqu'au maintien infini.
 - **Stéréo** : panoramique et léger décalage gauche/droite par grain.

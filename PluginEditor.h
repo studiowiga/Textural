@@ -40,7 +40,18 @@ private:
 
     void timerCallback() override;
     float scale() const { return (float) getHeight() / kDesignH; }
-    juce::Point<float> toDesign (const juce::MouseEvent& e) const { return e.position / scale(); }
+    // the pedal is drawn slightly smaller than the window: 10 px free above and below at 493 px
+    static constexpr float kPedalGap   = 10.0f * 1000.0f / 493.0f;
+    static constexpr float kPedalScale = (1000.0f - 2.0f * kPedalGap) / 1000.0f;
+    static juce::AffineTransform pedalTransform()
+    {
+        const float cx = kDesignW * 0.5f;
+        return juce::AffineTransform::translation (-cx, 0.0f).scaled (kPedalScale).translated (cx, kPedalGap);
+    }
+    juce::Point<float> toDesign (const juce::MouseEvent& e) const
+    {
+        return (e.position / scale()).transformedBy (pedalTransform().inverted());
+    }
     Hit  hitTest (juce::Point<float> p, int& knobIndex) const;
     Layer currentLayer() const;
     juce::String knobParamID (Layer, int knob) const;
