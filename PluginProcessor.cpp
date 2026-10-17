@@ -79,14 +79,14 @@ TexturalAudioProcessor::TexturalAudioProcessor()
 
 const String TexturalAudioProcessor::getProgramName (int index)
 {
-    return presetName (juce::jlimit (0, 8, index) + 1);
+    return presetName (juce::jlimit (0, kLastPreset - 1, index) + 1);
 }
 
 String TexturalAudioProcessor::presetName (int index) const
 {
     if (isLive (index)) return String (kLivePreset) + " Live";
     const auto& fp = factoryPresets();
-    if (index == kExtraPreset) return fp[(size_t) index - 1].name;              // DAW-only preset
+    if (index >= kExtraPreset && index <= kLastPreset) return fp[(size_t) index - 1].name;   // DAW-only presets
     if (index <= (int) fp.size()) return String (index) + " " + fp[(size_t) index - 1].name;
     return {};
 }
@@ -129,7 +129,7 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         const auto m = meta.getMessage();
         if (m.isProgramChange())
         {
-            pendingPreset = jlimit (0, kExtraPreset, m.getProgramChangeNumber());   // 0 = Live too
+            pendingPreset = jlimit (0, kLastPreset, m.getProgramChangeNumber());   // 0 = Live too
             triggerAsyncUpdate();
             continue;
         }
@@ -364,13 +364,13 @@ void TexturalAudioProcessor::applySnapshot (const std::map<String, float>& s)
 
 void TexturalAudioProcessor::selectPreset (int index)
 {
-    index = jlimit (0, kExtraPreset, index);
+    index = jlimit (0, kLastPreset, index);
     if (index == 0) index = kLivePreset;
     const int prev = currentPreset.load();
     if (isLive (prev) && ! isLive (index)) liveSnapshot = takeSnapshot();      // remember live mode settings
 
     if (isLive (index)) applySnapshot (liveSnapshot);
-    else if (index == kExtraPreset) applySnapshot (factorySnapshot (kExtraPreset - 1));   // not on the pedal slots
+    else if (index >= kExtraPreset) applySnapshot (factorySnapshot (index - 1));          // not on the pedal slots
     else            applySnapshot (userPresets[(size_t) index - 1]);
 
     loadedSnapshot = takeSnapshot();
@@ -590,7 +590,7 @@ void TexturalAudioProcessor::setStateInformation (const void* data, int size)
     }
     liveSnapshot   = stringToSnapshot (state.getProperty ("live").toString());
     loadedSnapshot = stringToSnapshot (state.getProperty ("loaded").toString());
-    currentPreset  = jlimit (0, kExtraPreset, (int) state.getProperty ("preset", kLivePreset));
+    currentPreset  = jlimit (0, kLastPreset, (int) state.getProperty ("preset", kLivePreset));
     if (currentPreset.load() == 0) currentPreset = kLivePreset;
     uiHeight       = jlimit (493, 1000, (int) state.getProperty ("uiHeight", 493));
     apvts.replaceState (state);

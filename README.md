@@ -23,7 +23,7 @@ La LED du bouton prend la couleur du symbole du mode et clignote quand le son es
 | Action | Effet |
 |---|---|
 | Glisser un bouton (haut/bas) | Réglage ; **Maj** = réglage fin ; double-clic = valeur par défaut ; molette OK |
-| Clic REVERSE | Grains inversés on/off (LED bleue) |
+| Clic REVERSE | Reverse on/off (LED bleue) : la guitare enregistrée est rejouée à l'envers, phrase par phrase |
 | Clic MODE | Delay (vert) → Auto Freeze (orange) → Layers (rouge) ; la LED prend la couleur du symbole et clignote quand le son est gelé |
 | Clic footswitch | Effet on/off (LED bleue) |
 | Maintien footswitch | Freeze momentané (Delay/Layers) ; en Auto Freeze, le maintien *dé-gèle*. Si *Footswitch Hold Mode* = Preset Scroll : maintien = entrer/sortir du défilement, clic = preset suivant |
@@ -42,7 +42,7 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
-Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
+Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack, 10 = Aurora Grains. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack et Aurora Grains. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
 |---|---|---|---|
@@ -78,14 +78,14 @@ Rouges :
 7. Mellow Cello : nappe une octave plus bas avec vibrato, plus présente après la note.
 8. Stardust Cloud : synthé granulaire en Layers avec une pluie de particules.
 
-**Slow Attack Soundtrack** n'occupe aucun emplacement de la pédale. On le charge depuis la liste des presets du DAW (programme 9 ou Program Change 9) ou par le menu clic droit.
+**Slow Attack Soundtrack** et **Aurora Grains** (nappe de synthé granulaire : grains minuscules désaccordés, filtre résonant, chorus lent) n'occupent aucun emplacement de la pédale. On les charge depuis la liste des presets du DAW (programmes 9 et 10, Program Change 9 et 10) ou par le menu clic droit.
 
 ## Moteur audio
 
 - **Grains** : enveloppe en cosinus qui s'adapte à OVERLAP (Hann quand les grains se chevauchent, fondu de 20 % au minimum), si bien que deux grains successifs se recouvrent toujours.
 - **Alignement de phase (type WSOLA)** : quand les grains sont peu nombreux, chaque nouveau grain est décalé de ±12 ms pour être en phase avec ceux qui jouent déjà, et le niveau est normalisé par la somme des fenêtres. Un son tenu garde ainsi un niveau constant, sans creux ni décrochage, y compris en reverse.
 - **Reverse** : les grains inversés ne lisent que de l'audio déjà enregistré et ne croisent jamais la tête d'écriture, donc aucun clic.
-- **Reverse** : avec TIME au minimum et OVERLAP bas, c'est un écho inversé classique : la dernière tranche jouée (longueur = SIZE) est rejouée à l'envers, avec un court fondu entre les tranches.
+- **REVERSE** (modes Delay et Auto Freeze) : un flux dédié rejoue la guitare enregistrée à l'envers, tranche par tranche, comme un reverse delay. SIZE règle la longueur des tranches (0,25 à 2 s), TIME le retard, et Reverse Random le dosage entre son inversé et grains (10 à 100 %). Les tranches s'enchaînent avec un fondu de 20 % aligné en phase : le son est continu et sans clic. En mode Layers, REVERSE inverse les grains des voix.
 - **Diffuseur** : un réseau de filtres passe-tout, sur le principe de Mutable Instruments Clouds, fond les grains en nappe quand OVERLAP est élevé.
 - **Reverb** : plate de Dattorro modulée, de la petite pièce jusqu'au maintien infini.
 - **Stéréo** : panoramique et léger décalage gauche/droite par grain.

@@ -72,6 +72,7 @@ private:
         bool   equalPower = false;    // reversed grains
         float  gL = 1, gR = 1;
         float  amp = 1;
+        int    stream = 0;            // 0 = grains, 1 = REVERSE echo stream, 2 = particles
     };
 
     struct Layer
@@ -116,6 +117,8 @@ private:
     float  grainSemis (const EngineParams& p);
     float  effectiveDensity (const EngineParams& p) const;
     void   spawnGrain (const EngineParams& p, int source, double regionStart, double regionEnd, double anchor, float scatter);
+    void   spawnReverseChunk (const EngineParams& p, double regionStart, double regionEnd, double anchor, float scatter);
+    bool   reverseStreamActive (const EngineParams& p) const { return p.reverse && p.mode != Mode::Layers; }
     void   spawnParticle (const EngineParams& p);
     void   onsetDetected (const EngineParams& p);
     bool   detectOnset (float x);
@@ -137,7 +140,8 @@ private:
     float  fA = 0, fR = 0, sA = 0, sR = 0;
     int    holdOff = 0;
 
-    double spawnCounter = 0, particleCounter = 0;
+    double spawnCounter = 0, particleCounter = 0, revCounter = 0;
+    float  revNorm = 1.0f, revMix = 0.0f;
     float  timeSmooth = 0.3f;
     float  fbPrevL = 0, fbPrevR = 0, fbEnv = 0;
     float  fbLpL = 0, fbLpR = 0, fbHpL = 0, fbHpR = 0;

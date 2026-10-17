@@ -38,7 +38,7 @@ void GranularEngine::reset()
     }
     afRecording = afHasSegment = false;
     envFast = envSlow = 0; holdOff = 0; noiseFloor = 0.001f;
-    spawnCounter = particleCounter = 0;
+    spawnCounter = particleCounter = revCounter = 0; revNorm = 1.0f; revMix = 0.0f;
     fbPrevL = fbPrevR = fbEnv = 0;
     fbLpL = fbLpR = fbHpL = fbHpR = 0;
     wowPhase = 0; haveLast = false;
@@ -90,7 +90,7 @@ double GranularEngine::alignToPrevious (const Grain& fresh, int fadeLen, double 
     int n = fadeLen;
     bool any = false;
     for (auto& g : grains)
-        if (g.active && &g != &fresh && g.source == fresh.source && g.amp >= 1.0f)
+        if (g.active && &g != &fresh && g.source == fresh.source && g.stream == fresh.stream && g.amp >= 1.0f)
         { any = true; n = juce::jmin (n, juce::jmax (fadeLen / 2, g.length - g.age)); }
     if (! any || n < 64) return 0.0;
 
@@ -103,7 +103,7 @@ double GranularEngine::alignToPrevious (const Grain& fresh, int fadeLen, double 
     for (int k = 0; k < m; ++k) { ref[k] = 0.0f; wnew[k] = window ((float) (k * step) / (float) fresh.length, fresh.taper, false); }
     for (auto& g : grains)
     {
-        if (! g.active || &g == &fresh || g.source != fresh.source || g.amp < 1.0f) continue;
+        if (! g.active || &g == &fresh || g.source != fresh.source || g.stream != fresh.stream || g.amp < 1.0f) continue;
         for (int k = 0; k < m; ++k)
         {
             const int age = g.age + k * step;
@@ -184,9 +184,12 @@ void GranularEngine::spawnGrain (const EngineParams& p, int source, double regio
     }
     lastStart = start; lastLen = len; lastRate = rate; haveLast = source < 0;
 
-    const bool rev = p.reverse && rnd() < Map::reverseProbability (p.reverseRnd);
+    // with the REVERSE echo stream running (Delay / Auto Freeze), these grains stay forward;
+    // in Layers mode REVERSE flips grains with the REVERSE RANDOM probability
+    const bool rev = p.reverse && ! reverseStreamActive (p) && rnd() < Map::reverseProbability (p.reverseRnd);
 
     g->active       = true;
+    g->stream       = 0;
     g->source       = source;
     g->length       = len;
     g->age          = 0;
@@ -277,6 +280,61 @@ void GranularEngine::spawnParticle (const EngineParams& p)
     g->gL = std::cos (a) * 1.41421356f;
     g->gR = std::sin (a) * 1.41421356f;
     g->amp = 0.5f;
+    g->stream = 2;
+}
+
+//------------------------------------------------------------------------------
+// REVERSE: the recorded guitar played backwards, phrase by phrase (classic reverse
+// echo). Each chunk (length = SIZE, at least 0.25 s) is read backwards from the
+// newest audio (TIME behind the head); chunks follow each other with a 20 %
+// phase-aligned cross-fade, so the reversed sound is continuous and click-free.
+void GranularEngine::spawnReverseChunk (const EngineParams& p, double regionStart, double regionEnd,
+                                        double anchor, float scatter)
+{
+    Grain* g = freeGrain();
+    if (g == nullptr) return;
+
+    float semis = Map::pitchSemis (p.pitch);
+    if (p.quantize) semis = Map::quantiseSemis (semis);
+    const double rate = std::exp2 (semis / 12.0f);
+    int len = (int) (juce::jlimit (0.25f, 2.0f, Map::sizeSeconds (p.size, p.mode)) * (float) sr);
+    double span = (double) len * rate;
+    const double regionLen = regionEnd - regionStart;
+    if (span > regionLen && regionLen > 512.0) { len = (int) (regionLen / rate); span = (double) len * rate; }
+
+    double end = anchor - (double) (rnd() * scatter) * juce::jmax (0.0, regionLen - span);
+    end = juce::jlimit (regionStart + span, regionEnd, end);
+
+    g->active = true;
+    g->source = -1;
+    g->stream = 1;
+    g->length = len;
+    g->age    = 0;
+    g->inc    = -rate;
+    g->pos    = end;
+    g->taper  = 0.2f;
+    g->equalPower = false;
+    g->amp    = 1.0f;
+    g->stereoOffset = p.stereo ? (double) (rnd() * 0.002f * (float) sr) : 0.0;
+    if (p.stereo)
+    {
+        const float pan = brnd() * 0.35f;                      // reversed phrases stay fairly central
+        const float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+        g->gL = std::cos (a) * 1.41421356f;
+        g->gR = std::sin (a) * 1.41421356f;
+    }
+    else g->gL = g->gR = 1.0f;
+
+    // phase-align with the chunk that is fading out
+    const int fadeLen = (int) ((float) len * g->taper);
+    const double maxS = 0.012 * sr;
+    const double lo = juce::jmax (-maxS, (regionStart + span) - end);
+    const double hi = juce::jmin ( maxS, regionEnd - end);
+    if (hi > lo)
+    {
+        float corr = 0.0f;
+        g->pos += alignToPrevious (*g, fadeLen, lo, hi, corr);
+    }
 }
 
 bool GranularEngine::detectOnset (float x)
@@ -488,6 +546,27 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
             }
         }
 
+        //------------------------------------------------- REVERSE echo stream
+        if (reverseStreamActive (p) && (revCounter -= 1.0) <= 0.0)
+        {
+            const double chunk = juce::jlimit (0.25, 2.0, (double) Map::sizeSeconds (p.size, p.mode)) * sr;
+            if (p.mode == Mode::Delay || unfreezeHeld)
+            {
+                const double regionEnd   = head - kGuard - 0.004 * sr;
+                const double regionStart = head - (double) bufLen + 0.1 * sr;
+                spawnReverseChunk (p, regionStart, regionEnd, regionEnd - (double) timeSmooth * sr + 0.05 * sr, 0.0f);
+                revCounter = chunk * 0.8;
+            }
+            else if (p.mode == Mode::AutoFreeze && afHasSegment)
+            {
+                double s0 = (double) afSegStart, s1 = (double) afSegStart + afSegLen;
+                if (s1 - s0 < chunk * 1.1) s0 = s1 - chunk * 1.1;
+                spawnReverseChunk (p, s0, s1, s1, 0.3f * p.timeRnd);
+                revCounter = chunk * 0.8;
+            }
+            else revCounter = 0.01 * sr;
+        }
+
         if (particles > 0.0f && (particleCounter -= 1.0) <= 0.0)
         {
             spawnParticle (p);
@@ -495,12 +574,12 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
         }
 
         //--------------------------------------------------------------- render
-        float sumL = 0, sumR = 0, wsum = 0;
+        float sumL = 0, sumR = 0, wsum = 0;          // grains + particles
+        float rvL = 0, rvR = 0, rvW = 0;             // REVERSE echo stream
         for (auto& g : grains)
         {
             if (! g.active) continue;
             float w = window ((float) g.age / (float) g.length, g.taper, g.equalPower && ! sparse) * g.amp;
-            if (g.amp >= 1.0f) wsum += w;
             float smpL, smpR;
             if (g.source < 0)
             {
@@ -515,8 +594,16 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
                 smpR = hermite (l.R.data(), ll, g.pos - g.stereoOffset);
                 w *= l.env * 1.15f;
             }
-            if (p.stereo) { sumL += smpL * w * g.gL; sumR += smpR * w * g.gR; }
-            else          { const float m = 0.5f * (smpL + smpR) * w; sumL += m; sumR += m; }
+            float oL, oR;
+            if (p.stereo) { oL = smpL * w * g.gL; oR = smpR * w * g.gR; }
+            else          { oL = oR = 0.5f * (smpL + smpR) * w; }
+
+            if (g.stream == 1) { rvL += oL; rvR += oR; rvW += w; }
+            else
+            {
+                sumL += oL; sumR += oR;
+                if (g.stream == 0) wsum += w;
+            }
 
             g.pos += g.inc;
             if (++g.age >= g.length) g.active = false;
@@ -529,9 +616,21 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
         }
         else
         {
-            // frozen washes sit lower than the live note: +4 dB make-up in Auto Freeze
+            // frozen washes sit lower than the live note: make-up gain in Auto Freeze
             const float g = normGain * (p.mode == Mode::AutoFreeze ? 1.5f : 1.0f);
             sumL *= g; sumR *= g;
+        }
+
+        // REVERSE: blend the backwards guitar with the grains (REVERSE RANDOM = 10..100 %)
+        const float revTarget = reverseStreamActive (p) ? Map::reverseProbability (p.reverseRnd) : 0.0f;
+        revMix  += 0.0004f * (revTarget - revMix);
+        revNorm += 0.02f * (1.0f / juce::jmax (0.35f, rvW) - revNorm);
+        if (revMix > 0.0005f || rvW > 0.0f)
+        {
+            const float gR = std::sqrt (juce::jlimit (0.0f, 1.0f, revMix));
+            const float gN = std::sqrt (juce::jlimit (0.0f, 1.0f, 1.0f - revMix));
+            sumL = sumL * gN + rvL * revNorm * gR;
+            sumR = sumR * gN + rvR * revNorm * gR;
         }
         fbPrevL = sumL * fbComp;
         fbPrevR = sumR * fbComp;

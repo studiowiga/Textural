@@ -31,13 +31,14 @@ public:
     bool isMidiEffect() const override                     { return false; }
     double getTailLengthSeconds() const override           { return 20.0; }
 
-    static constexpr int kExtraPreset = 9;                 // Slow Attack Soundtrack: DAW / menu only
+    static constexpr int kExtraPreset = 9;                 // first DAW / menu-only preset (Slow Attack Soundtrack)
+    static constexpr int kLastPreset  = 10;                // last one (Aurora Grains)
     static constexpr int kLivePreset  = 2;                 // pedal position 2 = Live mode
     static bool isLive (int i) { return i == 0 || i == kLivePreset; }
     // DAW program list: 0..7 = pedal positions 1..8 (Live appears once, as "2 Live"), 8 = extra preset
-    int getNumPrograms() override                          { return 9; }
+    int getNumPrograms() override                          { return kLastPreset; }
     int getCurrentProgram() override                       { const int c = currentPreset.load(); return c == 0 ? kLivePreset - 1 : c - 1; }
-    void setCurrentProgram (int index) override            { selectPreset (juce::jlimit (0, 8, index) + 1); }
+    void setCurrentProgram (int index) override            { selectPreset (juce::jlimit (0, kLastPreset - 1, index) + 1); }
     const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 

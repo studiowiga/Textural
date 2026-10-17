@@ -394,8 +394,9 @@ void TexturalAudioProcessorEditor::showMenu()
     }
     m.addItem (22, "Reset all presets to factory");
     m.addSeparator();
-    m.addItem (23, "Load preset: " + proc.presetName (TexturalAudioProcessor::kExtraPreset), true,
-               proc.currentPreset.load() == TexturalAudioProcessor::kExtraPreset);
+    for (int x = TexturalAudioProcessor::kExtraPreset; x <= TexturalAudioProcessor::kLastPreset; ++x)
+        m.addItem (23 + x - TexturalAudioProcessor::kExtraPreset, "Load preset: " + proc.presetName (x), true,
+                   proc.currentPreset.load() == x);
 
     SafePointer<TexturalAudioProcessorEditor> safe (this);
     m.showMenuAsync (PopupMenu::Options().withMousePosition(), [safe] (int r)
@@ -410,8 +411,13 @@ void TexturalAudioProcessorEditor::showMenu()
             case 4: ed.setHeightKeepingAspect (1000); break;
             case 21: ed.proc.resetPresetToFactory (ed.proc.currentPreset.load()); break;
             case 22: ed.proc.resetAllPresets(); break;
-            case 23: ed.proc.selectPreset (TexturalAudioProcessor::kExtraPreset);
-                     ed.showMessage (ed.proc.presetName (TexturalAudioProcessor::kExtraPreset).toUpperCase(), Colour (0xff121212)); break;
+            case 23: case 24:
+            {
+                const int x = TexturalAudioProcessor::kExtraPreset + r - 23;
+                ed.proc.selectPreset (x);
+                ed.showMessage (ed.proc.presetName (x).toUpperCase(), Colour (0xff121212));
+                break;
+            }
             default: if (r > 10 && r <= 18) ed.proc.savePresetTo (r - 10); break;
         }
     });
