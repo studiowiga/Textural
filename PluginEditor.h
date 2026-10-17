@@ -62,7 +62,7 @@ private:
     void drawStatusLine (juce::Graphics&) const;
 
     TexturalAudioProcessor& proc;
-    juce::Image faceplate, footswitchImg;
+    juce::Image faceplate, footswitchImg, backgroundImg;
     static constexpr int   kKnobFrames  = 30;     // cap frames over one 360/7 degree lobe period
     static constexpr int   kKnobFramePx = 276;    // 2x resolution sprites
     juce::Image knobFrames[2][kKnobFrames], knobBase[2], knobPointer[2];

@@ -224,7 +224,7 @@ void GranularEngine::spawnGrain (const EngineParams& p, int source, double regio
     else g->gL = g->gR = 1.0f;
 }
 
-// MIX above 60 %: a cloud of tiny "particle" grains (10-45 ms) scattered in time
+// MIX above 75 %: a cloud of tiny "particle" grains (10-45 ms) scattered in time
 // and across the stereo field; sparkle (octave/twelfth) follows PITCH RANDOM,
 // direction follows REVERSE.
 void GranularEngine::spawnParticle (const EngineParams& p)
@@ -356,7 +356,7 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
     const float toneHP = p.cutoff > 0.5f ? 70.0f * std::pow (900.0f / 70.0f, (p.cutoff - 0.5f) / 0.5f) : 70.0f;
     const float lpC = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneLP / (float) sr);
     const float hpC = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneHP / (float) sr);
-    const float particles = juce::jlimit (0.0f, 1.0f, (p.mix - 0.6f) / 0.4f);
+    const float particles = juce::jlimit (0.0f, 1.0f, (p.mix - 0.75f) / 0.25f);
 
     const float attackInc  = 1.0f / (Map::timeSeconds (p.time, Mode::Layers) * (float) sr);
     const float decayCoef  = std::exp (-6.9f / (Map::layerDecaySeconds (p.regen) * (float) sr));
@@ -527,7 +527,12 @@ void GranularEngine::process (const float* inLp, const float* inRp, const float*
             olaNorm += 0.02f * (1.0f / juce::jmax (0.35f, wsum) - olaNorm);
             sumL *= olaNorm; sumR *= olaNorm;
         }
-        else { sumL *= normGain; sumR *= normGain; }
+        else
+        {
+            // frozen washes sit lower than the live note: +4 dB make-up in Auto Freeze
+            const float g = normGain * (p.mode == Mode::AutoFreeze ? 1.5f : 1.0f);
+            sumL *= g; sumR *= g;
+        }
         fbPrevL = sumL * fbComp;
         fbPrevR = sumR * fbComp;
         wetL[i] = sumL;

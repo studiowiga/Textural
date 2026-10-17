@@ -42,7 +42,7 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
-Program Change 0 = Live, 1-8 = presets, 9 = Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
+Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
 |---|---|---|---|
@@ -64,17 +64,28 @@ Program Change 0 = Live, 1-8 = presets, 9 = Slow Attack Soundtrack. Tous les par
 
 ## Presets d'usine
 
-Verts : 1 Crystal Cave (boucles d'octaves régénérées) · 2 Melodic Kaleidoscope (Auto Freeze : mélodies gelées, à l'endroit, à l'envers, à d'autres octaves) · 3 Sea Synth (synthé polyphonique ondulant) · 4 Obligatory Shimmer (reverb shimmer granulaire).
-Rouges : 5 Reverse Reverb (queues de reverb jouées à l'envers) · 6 Stutter Pad (nappe polyphonique un peu glitchée, à jouer staccato) · 7 Sub Octave Ripple (cascade rapide à l'octave inférieure) · 8 Mellow Cello (nappe à l'octave inférieure avec vibrato).
+À l'ouverture, la pédale charge le preset 1 (Sea Synth). Le bouton PRESETS fait défiler 1 → 2 → … → 8 → 1.
 
-**Slow Attack Soundtrack** (nappe lente avec des sauts d'octave aléatoires) n'occupe aucun emplacement de la pédale. On le charge depuis la liste des presets du DAW (programme 9 ou Program Change 9) ou par le menu clic droit.
+Verts :
+1. Sea Synth : synthé polyphonique ondulant.
+2. **Live** : les réglages courants des potards, non sauvegardable.
+3. Crystal Cave : boucles d'octaves régénérées.
+4. Melodic Kaleidoscope : mélodies gelées, à l'endroit, à l'envers, à d'autres octaves.
+
+Rouges :
+5. Obligatory Shimmer : Regen Mix 83/17 delay/granulaire.
+6. Reverse Reverb : la guitare jouée à l'envers dans une reverb.
+7. Mellow Cello : nappe une octave plus bas avec vibrato, plus présente après la note.
+8. Stardust Cloud : synthé granulaire en Layers avec une pluie de particules.
+
+**Slow Attack Soundtrack** n'occupe aucun emplacement de la pédale. On le charge depuis la liste des presets du DAW (programme 9 ou Program Change 9) ou par le menu clic droit.
 
 ## Moteur audio
 
 - **Grains** : enveloppe en cosinus qui s'adapte à OVERLAP (Hann quand les grains se chevauchent, fondu de 20 % au minimum), si bien que deux grains successifs se recouvrent toujours.
 - **Alignement de phase (type WSOLA)** : quand les grains sont peu nombreux, chaque nouveau grain est décalé de ±12 ms pour être en phase avec ceux qui jouent déjà, et le niveau est normalisé par la somme des fenêtres. Un son tenu garde ainsi un niveau constant, sans creux ni décrochage, y compris en reverse.
 - **Reverse** : les grains inversés ne lisent que de l'audio déjà enregistré et ne croisent jamais la tête d'écriture, donc aucun clic.
-- **Reverse reverb** : avec REVERSE actif, une partie de la reverb (dosée par Reverb Mix) est placée avant les grains, qui rejouent donc des queues de reverb à l'envers.
+- **Reverse reverb** : avec REVERSE actif, une partie de la reverb (la moitié de Reverb Mix) est placée avant les grains, qui rejouent donc des queues de reverb à l'envers.
 - **Diffuseur** : un réseau de filtres passe-tout, sur le principe de Mutable Instruments Clouds, fond les grains en nappe quand OVERLAP est élevé.
 - **Reverb** : plate de Dattorro modulée, de la petite pièce jusqu'au maintien infini.
 - **Stéréo** : panoramique et léger décalage gauche/droite par grain.
@@ -82,7 +93,7 @@ Rouges : 5 Reverse Reverb (queues de reverb jouées à l'envers) · 6 Stutter Pa
 
 ## Fonctions cachées (sans boutons supplémentaires)
 
-- **MIX au-delà de 60 %** : ajoute progressivement un nuage de particules granulaires (grains de 10 à 45 ms, panoramiques aléatoires, à l'octave ou à la douzième selon Pitch Random, inversés selon Reverse).
+- **MIX au-delà de 75 %** : ajoute progressivement un nuage de particules granulaires (grains de 10 à 45 ms, panoramiques aléatoires, à l'octave ou à la douzième selon Pitch Random, inversés selon Reverse).
 - **Pitch Random** : le premier tiers donne un désaccord « unisson » façon synthé (jusqu'à ±30 cents). Au-delà, les grains sautent d'intervalle harmonique.
 - **Time Random au-delà de 45 %** : effet glitch, certains grains rejouent la tranche précédente (stutter).
 - **Delay** : en sortie Stéréo, les répétitions font du ping-pong. Le filtre colore les répétitions : sous midi, écho analogique sombre ; au-dessus, son lo-fi aminci. Vibrato Depth ajoute un wow de bande sur les répétitions.

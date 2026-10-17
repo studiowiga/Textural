@@ -44,6 +44,7 @@ TexturalAudioProcessorEditor::TexturalAudioProcessorEditor (TexturalAudioProcess
 {
     faceplate = ImageCache::getFromMemory (BinaryData::faceplate_png, BinaryData::faceplate_pngSize);
     footswitchImg = ImageCache::getFromMemory (BinaryData::footswitch_png, BinaryData::footswitch_pngSize);
+    backgroundImg = ImageCache::getFromMemory (BinaryData::background_png, BinaryData::background_pngSize);
 
     // knob photos: static base, rotating 7-lobe cap (light kept fixed), pointer sprite
     const Image caps[2] = { ImageCache::getFromMemory (BinaryData::knob_cap_black_png,  BinaryData::knob_cap_black_pngSize),
@@ -248,7 +249,8 @@ void TexturalAudioProcessorEditor::mouseUp (const MouseEvent& e)
             case Hit::PresetBtn:
                 if (copyMode)
                 {
-                    copyTarget = copyTarget % 8 + 1;                   // navigate target slot (1..8)
+                    do copyTarget = copyTarget % 8 + 1;                // navigate target slot (1..8, not Live)
+                    while (copyTarget == TexturalAudioProcessor::kLivePreset);
                     copyUntil = nowMs() + 12000.0;
                 }
                 else
@@ -256,7 +258,7 @@ void TexturalAudioProcessorEditor::mouseUp (const MouseEvent& e)
                     proc.nextPreset();
                     const int cur = proc.currentPreset.load();
                     showMessage (proc.presetName (cur).toUpperCase(),
-                                 cur == 0 ? Colour (0xff121212) : cur <= 4 ? Colour (0xff11a83c) : Colour (0xffd0102c));
+                                 cur <= 4 ? Colour (0xff11a83c) : Colour (0xffd0102c));
                 }
                 break;
 
@@ -354,7 +356,8 @@ void TexturalAudioProcessorEditor::timerCallback()
             if (! copyMode)
             {
                 copyMode = true;                                      // copy current settings
-                copyTarget = jlimit (1, 8, proc.currentPreset.load() == 0 ? 1 : proc.currentPreset.load());
+                const int c = proc.currentPreset.load();
+                copyTarget = (c >= 1 && c <= 8 && ! TexturalAudioProcessor::isLive (c)) ? c : 1;
                 copyUntil = nowMs() + 12000.0;
             }
             else
@@ -383,9 +386,12 @@ void TexturalAudioProcessorEditor::showMenu()
     m.addSeparator();
 
     PopupMenu save;
-    for (int i = 1; i <= 8; ++i) save.addItem (10 + i, proc.presetName (i));
+    for (int i = 1; i <= 8; ++i) if (! TexturalAudioProcessor::isLive (i)) save.addItem (10 + i, proc.presetName (i));
     m.addSubMenu ("Save current settings to preset", save);
-    m.addItem (21, "Reset current preset to factory", proc.currentPreset.load() > 0);
+    {
+        const int c = proc.currentPreset.load();
+        m.addItem (21, "Reset current preset to factory", c >= 1 && c <= 8 && ! TexturalAudioProcessor::isLive (c));
+    }
     m.addItem (22, "Reset all presets to factory");
     m.addSeparator();
     m.addItem (23, "Load preset: " + proc.presetName (TexturalAudioProcessor::kExtraPreset), true,
@@ -421,6 +427,8 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
 
     g.setImageResamplingQuality (Graphics::highResamplingQuality);
     g.setOpacity (1.0f);
+    // black backdrop with a faint echo of the pedal's granular wave pattern
+    g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH));
     g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kDesignW - 2.0f * kPedalX, kDesignH));
 
     const Layer layer = currentLayer();

@@ -39,7 +39,7 @@ struct EngineParams
     bool    stereo      = false;
     float   tapSpacing  = 0.0f;      // seconds, 0 = use OVERLAP
     bool    inputMuted  = false;     // trails while bypassed
-    float   mix         = 0.5f;      // MIX above 60 % sprays particle grains
+    float   mix         = 0.5f;      // MIX above 75 % sprays particle grains
     float   cutoff      = 0.5f;      // filter knob, also colours the regenerated repeats
     float   vibDepth    = 0.0f;      // vibrato depth, also adds tape wow to the repeats
 };

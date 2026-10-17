@@ -32,6 +32,8 @@ public:
     double getTailLengthSeconds() const override           { return 20.0; }
 
     static constexpr int kExtraPreset = 9;                 // Slow Attack Soundtrack: DAW / menu only
+    static constexpr int kLivePreset  = 2;                 // pedal position 2 = Live mode
+    static bool isLive (int i) { return i == 0 || i == kLivePreset; }
     int getNumPrograms() override                          { return 10; }
     int getCurrentProgram() override                       { return currentPreset.load(); }
     void setCurrentProgram (int index) override            { selectPreset (index); }

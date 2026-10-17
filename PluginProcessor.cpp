@@ -73,6 +73,8 @@ TexturalAudioProcessor::TexturalAudioProcessor()
     for (int i = 0; i < 8; ++i) userPresets[(size_t) i] = factorySnapshot (i);
     loadUserPresetFile();
     liveSnapshot = takeSnapshot();
+    currentPreset = kLivePreset;
+    selectPreset (1);                       // the pedal opens on preset 1 (Sea Synth)
 }
 
 const String TexturalAudioProcessor::getProgramName (int index)
@@ -82,7 +84,7 @@ const String TexturalAudioProcessor::getProgramName (int index)
 
 String TexturalAudioProcessor::presetName (int index) const
 {
-    if (index <= 0) return "Live";
+    if (isLive (index)) return String (kLivePreset) + " Live";
     const auto& fp = factoryPresets();
     if (index == kExtraPreset) return fp[(size_t) index - 1].name;              // DAW-only preset
     if (index <= (int) fp.size()) return String (index) + " " + fp[(size_t) index - 1].name;
@@ -127,7 +129,7 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         const auto m = meta.getMessage();
         if (m.isProgramChange())
         {
-            pendingPreset = jlimit (0, kExtraPreset, m.getProgramChangeNumber());
+            pendingPreset = jlimit (0, kExtraPreset, m.getProgramChangeNumber());   // 0 = Live too
             triggerAsyncUpdate();
             continue;
         }
@@ -217,7 +219,7 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
 
     // REVERSE REVERB: with REVERSE on, the reverb is also placed before the grains,
     // so reversed grains replay reverb tails backwards (swelling "reverse reverb").
-    preAmt.setTargetValue (ep.reverse ? value (PID::reverbMix) : 0.0f);
+    preAmt.setTargetValue (ep.reverse ? 0.5f * value (PID::reverbMix) : 0.0f);   // guitar stays defined
     preReverb.setTone (value (PID::cutoff));
     preReverb.setDecay (jmin (12.0f, Map::reverbRT60 (value (PID::reverbDecay))));
     {
@@ -363,10 +365,11 @@ void TexturalAudioProcessor::applySnapshot (const std::map<String, float>& s)
 void TexturalAudioProcessor::selectPreset (int index)
 {
     index = jlimit (0, kExtraPreset, index);
+    if (index == 0) index = kLivePreset;
     const int prev = currentPreset.load();
-    if (prev == 0 && index != 0) liveSnapshot = takeSnapshot();      // remember live mode settings
+    if (isLive (prev) && ! isLive (index)) liveSnapshot = takeSnapshot();      // remember live mode settings
 
-    if (index == 0) applySnapshot (liveSnapshot);
+    if (isLive (index)) applySnapshot (liveSnapshot);
     else if (index == kExtraPreset) applySnapshot (factorySnapshot (kExtraPreset - 1));   // not on the pedal slots
     else            applySnapshot (userPresets[(size_t) index - 1]);
 
@@ -376,12 +379,23 @@ void TexturalAudioProcessor::selectPreset (int index)
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }
 
-void TexturalAudioProcessor::nextPreset()      { selectPreset ((jmin (8, currentPreset.load()) + 1) % 9); }
-void TexturalAudioProcessor::previousPreset()  { selectPreset ((jmin (8, currentPreset.load()) + 8) % 9); }
+// PRESETS button: 1 -> 2 (Live) -> 3 ... 8 -> 1
+void TexturalAudioProcessor::nextPreset()
+{
+    const int c = currentPreset.load();
+    const int base = (c >= 1 && c <= 8) ? c : 0;
+    selectPreset (base % 8 + 1);
+}
+void TexturalAudioProcessor::previousPreset()
+{
+    const int c = currentPreset.load();
+    const int base = (c >= 1 && c <= 8) ? c : 1;
+    selectPreset (base == 1 ? 8 : base - 1);
+}
 
 void TexturalAudioProcessor::savePresetTo (int slot)
 {
-    if (slot < 1 || slot > 8) return;
+    if (slot < 1 || slot > 8 || slot == kLivePreset) return;
     userPresets[(size_t) slot - 1] = takeSnapshot();
     loadedSnapshot = takeSnapshot();
     currentPreset = slot;
@@ -390,7 +404,7 @@ void TexturalAudioProcessor::savePresetTo (int slot)
 
 void TexturalAudioProcessor::resetPresetToFactory (int slot)
 {
-    if (slot < 1 || slot > 8) return;
+    if (slot < 1 || slot > 8 || slot == kLivePreset) return;
     userPresets[(size_t) slot - 1] = factorySnapshot (slot - 1);
     saveUserPresetFile();
     if (currentPreset.load() == slot) selectPreset (slot);
@@ -400,12 +414,12 @@ void TexturalAudioProcessor::resetAllPresets()
 {
     for (int i = 0; i < 8; ++i) userPresets[(size_t) i] = factorySnapshot (i);
     saveUserPresetFile();
-    if (currentPreset.load() > 0) selectPreset (currentPreset.load());
+    if (! isLive (currentPreset.load())) selectPreset (currentPreset.load());
 }
 
 bool TexturalAudioProcessor::isPresetModified() const
 {
-    if (currentPreset.load() == 0) return false;
+    if (isLive (currentPreset.load())) return false;
     for (auto& [id, v] : loadedSnapshot)
         if (std::abs (apvts.getParameter (id)->getValue() - v) > 0.004f) return true;
     return false;
@@ -430,7 +444,7 @@ std::map<String, float> TexturalAudioProcessor::stringToSnapshot (const String& 
 File TexturalAudioProcessor::userPresetFile() const
 {
     return File::getSpecialLocation (File::userApplicationDataDirectory)
-             .getChildFile ("Studio Wiga").getChildFile ("Textural").getChildFile ("UserPresets.xml");
+             .getChildFile ("Studio Wiga").getChildFile ("Textural").getChildFile ("UserPresets_v4.xml");
 }
 
 void TexturalAudioProcessor::loadUserPresetFile()
@@ -517,7 +531,7 @@ String TexturalAudioProcessor::describe (const String& id) const
         if (value (PID::quantize) > 0.5f) s = Map::quantiseSemis (s);
         return "PITCH " + String (s > 0 ? "+" : "") + String (s, 1) + " st";
     }
-    if (id == PID::mix)        return "MIX " + pc (v) + (v > 0.6f ? "  +PARTICLES " + pc ((v - 0.6f) / 0.4f) : String());
+    if (id == PID::mix)        return "MIX " + pc (v) + (v > 0.75f ? "  +PARTICLES " + pc ((v - 0.75f) / 0.25f) : String());
     if (id == PID::timeRnd)    return "TIME RND " + pc (v);
     if (id == PID::sizeRnd)    return "SIZE RND " + pc (v);
     if (id == PID::overlapRnd) return "OVERLAP RND " + pc (v);
@@ -552,7 +566,7 @@ void TexturalAudioProcessor::getStateInformation (MemoryBlock& dest)
     auto state = apvts.copyState();
     state.setProperty ("preset", currentPreset.load(), nullptr);
     state.setProperty ("uiHeight", uiHeight.load(), nullptr);
-    state.setProperty ("live", snapshotToString (currentPreset.load() == 0 ? takeSnapshot() : liveSnapshot), nullptr);
+    state.setProperty ("live", snapshotToString (isLive (currentPreset.load()) ? takeSnapshot() : liveSnapshot), nullptr);
     state.setProperty ("loaded", snapshotToString (loadedSnapshot), nullptr);
     for (int i = 0; i < 8; ++i)
         state.setProperty ("user" + String (i + 1), snapshotToString (userPresets[(size_t) i]), nullptr);
@@ -576,7 +590,8 @@ void TexturalAudioProcessor::setStateInformation (const void* data, int size)
     }
     liveSnapshot   = stringToSnapshot (state.getProperty ("live").toString());
     loadedSnapshot = stringToSnapshot (state.getProperty ("loaded").toString());
-    currentPreset  = jlimit (0, kExtraPreset, (int) state.getProperty ("preset", 0));
+    currentPreset  = jlimit (0, kExtraPreset, (int) state.getProperty ("preset", kLivePreset));
+    if (currentPreset.load() == 0) currentPreset = kLivePreset;
     uiHeight       = jlimit (493, 1000, (int) state.getProperty ("uiHeight", 493));
     apvts.replaceState (state);
 }

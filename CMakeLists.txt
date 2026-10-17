@@ -33,7 +33,7 @@ juce_add_plugin(Textural
 juce_generate_juce_header(Textural)
 
 juce_add_binary_data(TexturalData SOURCES
-    faceplate.png footswitch.png
+    faceplate.png footswitch.png background.png
     knob_base_black.png knob_cap_black.png knob_ptr_black.png
     knob_base_orange.png knob_cap_orange.png knob_ptr_orange.png)
 
