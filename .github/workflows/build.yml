@@ -1,0 +1,49 @@
+name: Build Textural VST3 (Windows)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure (CMake + Visual Studio 2022, x64)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Collect VST3
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Recurse -Force "build/Textural_artefacts/Release/VST3/Textural.vst3" "dist/Textural.vst3"
+          Get-ChildItem -Recurse dist | Select-Object FullName
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: Textural-VST3-Windows
+          path: dist/Textural.vst3
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Textural-Setup-Windows
+          path: dist/Textural-Setup.exe
+          if-no-files-found: warn
