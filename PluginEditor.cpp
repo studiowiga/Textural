@@ -125,8 +125,17 @@ void TexturalAudioProcessorEditor::setParam (const String& id, float v)
     touch (id);
 }
 
+void TexturalAudioProcessorEditor::showMessage (const String& text, Colour colour)
+{
+    statusMsg = text;
+    statusMsgColour = colour;
+    statusKnob = -1;
+    statusMs = nowMs();
+}
+
 void TexturalAudioProcessorEditor::showKnob (int knob, const String& id)
 {
+    statusMsg.clear();
     statusKnob = knob;
     statusParam = id;
     statusMs = nowMs();
@@ -196,7 +205,12 @@ void TexturalAudioProcessorEditor::mouseUp (const MouseEvent& e)
         {
             case Hit::ReverseBtn:
                 if (latched == Layer::Reverse) latched = Layer::Main;
-                else setParam (PID::reverse, proc.value (PID::reverse) > 0.5f ? 0.0f : 1.0f);
+                else
+                {
+                    const bool on = proc.value (PID::reverse) < 0.5f;
+                    setParam (PID::reverse, on ? 1.0f : 0.0f);
+                    showMessage (on ? "REVERSE ON" : "REVERSE OFF", Colour (0xff0a9fd0));
+                }
                 break;
 
             case Hit::ModeBtn:
@@ -204,12 +218,16 @@ void TexturalAudioProcessorEditor::mouseUp (const MouseEvent& e)
                 {
                     proc.tap();
                     touch (PID::overlap);
+                    showMessage ("TAP " + String (roundToInt (proc.tapBpm.load())) + " BPM", Colour (0xff121212));
                 }
                 else if (latched == Layer::Mode) latched = Layer::Main;
                 else
                 {
                     const int m = (roundToInt (proc.value (PID::mode)) + 1) % 3;
                     setParam (PID::mode, proc.param (PID::mode)->convertTo0to1 ((float) m));
+                    static const char* names[3] = { "DELAY MODE", "AUTO FREEZE MODE", "LAYERS MODE" };
+                    static const Colour cols[3] = { Colour (0xff1e9e2a), Colour (0xfff26d0f), Colour (0xffd0102c) };
+                    showMessage (names[m], cols[m]);
                 }
                 break;
 
@@ -234,7 +252,12 @@ void TexturalAudioProcessorEditor::mouseUp (const MouseEvent& e)
                     copyUntil = nowMs() + 12000.0;
                 }
                 else
+                {
                     proc.nextPreset();
+                    const int cur = proc.currentPreset.load();
+                    showMessage (proc.presetName (cur).toUpperCase(),
+                                 cur == 0 ? Colour (0xff121212) : cur <= 4 ? Colour (0xff11a83c) : Colour (0xffd0102c));
+                }
                 break;
 
             case Hit::None:
@@ -460,8 +483,9 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
 
 void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
 {
-    // nothing is shown until a knob is turned; only that knob's setting is displayed
-    if (statusKnob < 0 || statusParam.isEmpty()) return;
+    // nothing is shown until a knob is turned (or a button pressed); only that setting is displayed
+    const bool isMsg = statusMsg.isNotEmpty();
+    if (! isMsg && (statusKnob < 0 || statusParam.isEmpty())) return;
     const double age = nowMs() - statusMs;
     const bool turning = dragKnob >= 0 && dragKnob == statusKnob;
     float alpha = 1.0f;
@@ -471,10 +495,11 @@ void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
         if (age > 1100.0) alpha = (float) (1.0 - (age - 1100.0) / 500.0);
     }
 
-    const String txt = proc.describe (statusParam);
+    const String txt = isMsg ? statusMsg : proc.describe (statusParam);
 
     // text takes the colour of the knob being turned
-    const Colour col = kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212);
+    const Colour col = isMsg ? statusMsgColour
+                             : (kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212));
     g.setColour (col.withAlpha (alpha));
     g.setFont (FontOptions (24.0f, Font::bold));
     g.drawFittedText (txt, Rectangle<int> (232, 868, 521, 36), Justification::centred, 1, 0.75f);

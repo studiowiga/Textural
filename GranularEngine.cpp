@@ -41,7 +41,7 @@ void GranularEngine::reset()
         std::fill (l.R.begin(), l.R.end(), 0.0f);
     }
     afRecording = afHasSegment = false;
-    envFast = envSlow = 0; holdOff = 0;
+    envFast = envSlow = 0; holdOff = 0; noiseFloor = 0.001f;
     spawnCounter = 0;
     fbPrevL = fbPrevR = 0;
     fbEnv = 0;
@@ -95,6 +95,13 @@ void GranularEngine::spawnGrain (const EngineParams& p, int source, double sourc
         glen  = juce::jmax (64, (int) ((float) lastLen * (rnd() < 0.5f ? 0.5f : 1.0f)));
         grate = lastRate;
         end   = start + (double) glen * grate;
+    }
+    if (source >= 0)                     // layer buffers: keep the grain inside the recorded note
+    {
+        const double lim = (double) layers[(size_t) source].length;
+        const double sp = (double) glen * grate;
+        if (start < 0.0) { start = 0.0; end = sp; }
+        if (end > lim)   { end = lim; start = juce::jmax (0.0, lim - sp); }
     }
     lastStart = start; lastLen = glen; lastRate = grate; haveLast = source < 0;
     const bool   rev   = p.reverse && rnd() < Map::reverseProbability (p.reverseRnd);
@@ -173,9 +180,11 @@ bool GranularEngine::detectOnset (float x)
     envFast += (a > envFast ? fA : fR) * (a - envFast);
     envSlow += (a > envSlow ? sA : sR) * (a - envSlow);
     if (holdOff > 0) { --holdOff; return false; }
-    if (envFast > 0.0035f && envFast > envSlow * 1.9f + 0.0008f)
+    // adaptive note/chord detector: a clear rise above the recent level and the noise floor
+    noiseFloor += (envSlow < noiseFloor ? 0.002f : 0.000002f) * (envSlow - noiseFloor);
+    if (envFast > juce::jmax (0.0025f, noiseFloor * 4.0f) && envFast > envSlow * 1.7f + 0.0006f)
     {
-        holdOff = (int) (0.12 * sr);
+        holdOff = (int) (holdSeconds * sr);
         return true;
     }
     return false;
@@ -206,9 +215,9 @@ void GranularEngine::onsetDetected (const EngineParams& p)
         if (slot->stage != Layer::Off) slot->stage = Layer::Release;
         const float sizeSec = Map::sizeSeconds (p.size, Mode::Layers);
         slot->recording = true;
-        slot->recStart  = writePos - (int) (0.008 * sr);
+        slot->recStart  = writePos - (int) (0.002 * sr);
         slot->recCount  = 0;
-        slot->recLen    = (int) (juce::jlimit (0.25f, 2.4f, sizeSec * 2.2f) * sr);
+        slot->recLen    = (int) (juce::jlimit (0.6f, 2.4f, 0.45f + sizeSec * 3.0f) * sr);
         slot->order     = ++layerCounter;
     }
 }
@@ -224,6 +233,7 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
         lastMode = p.mode;
     }
 
+    holdSeconds = p.mode == Mode::Layers ? 0.22f : 0.12f;
     const float timeTarget   = Map::timeSeconds (p.time, Mode::Delay);
     const float fb           = p.mode == Mode::Layers ? 0.0f : Map::feedback (p.regen);
     const float fbDelay      = fb * (1.0f - p.regenMix);
@@ -319,7 +329,7 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
         {
             if ((spawnCounter -= 1.0) <= 0.0)
             {
-                spawnGrain (p, -1, (double) (afSegStart + afSegLen), p.timeRnd * (float) afSegLen, density);
+                spawnGrain (p, -1, (double) (afSegStart + afSegLen), (0.25f + 0.75f * p.timeRnd) * (float) afSegLen, density);
                 spawnCounter = nextInterval();
             }
         }
@@ -366,7 +376,7 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
                 {
                     if ((l.spawnCounter -= 1.0) <= 0.0)
                     {
-                        spawnGrain (p, li, (double) l.length, 0.0f, density);
+                        spawnGrain (p, li, (double) l.length, 0.9f * (float) l.length, density);
                         l.spawnCounter = nextInterval();
                     }
                 }
@@ -399,7 +409,7 @@ void GranularEngine::process (const float* inLp, const float* inRp, float* wetL,
                 const int ll = (int) l.L.size();
                 sL = hermite (l.L.data(), ll, g.pos);
                 sR = hermite (l.R.data(), ll, g.pos);
-                w *= l.env * 0.7f;                       // layer amplitude envelope
+                w *= l.env * 1.15f;                      // layer amplitude envelope (fade-in TIME, fade-out REGEN)
             }
 
             if (p.stereo) { sumL += sL * w * g.gL; sumR += sR * w * g.gR; }

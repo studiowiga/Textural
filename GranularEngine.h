@@ -74,10 +74,8 @@ private:
     static inline float softClip (float x) { x = juce::jlimit (-3.0f, 3.0f, x); return x * (27.0f + x * x) / (27.0f + 9.0f * x * x); }
     static inline float window (float t)
     {
-        constexpr float taper = 0.3f;     // Tukey window
-        if (t < taper)        return 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * t / taper);
-        if (t > 1.0f - taper) return 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (1.0f - t) / taper);
-        return 1.0f;
+        // Hann grain envelope: smooth, airy grains that blend into a granular cloud
+        return 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * t);
     }
     static inline float hermite (const float* b, int len, double pos)
     {
@@ -113,7 +111,7 @@ private:
     int    afSegStart = 0, afSegLen = 0;
 
     // onset detector
-    float  envFast = 0, envSlow = 0;
+    float  envFast = 0, envSlow = 0, noiseFloor = 0.001f, holdSeconds = 0.12f;
     int    holdOff = 0;
 
     double spawnCounter = 0;

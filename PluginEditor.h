@@ -49,6 +49,7 @@ private:
     void setParam (const juce::String& id, float normalised);
     void touch (const juce::String& id);
     void showKnob (int knob, const juce::String& id);
+    void showMessage (const juce::String& text, juce::Colour colour);
 
     // drawing
     void drawKnob (juce::Graphics&, juce::Point<float> c, float r, float angle, bool orange) const;
@@ -84,7 +85,8 @@ private:
     double copyUntil = 0;
 
     int statusKnob = -1;
-    juce::String statusParam;
+    juce::String statusParam, statusMsg;
+    juce::Colour statusMsgColour;
     double statusMs = 0, lastMidiSeen = 0;
     juce::String lastTouched;
     double lastTouchedMs = 0;

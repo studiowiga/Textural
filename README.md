@@ -10,6 +10,14 @@ Moteur de synthèse granulaire inspiré de la pédale MXR Textures M310 : trois 
    - `Textural-VST3-Windows` : le dossier `Textural.vst3` à copier soi-même dans `C:\Program Files\Common Files\VST3`.
 3. Relance un scan des plugins dans ton DAW : le plugin apparaît sous **Textural**, fabricant **Studio Wiga**.
 
+## Les trois modes (bouton MODE, à droite de REVERSE)
+
+La LED du bouton prend la couleur du symbole du mode et clignote quand le son est gelé. Le nom du mode s'affiche dans la ligne d'état.
+
+- **Delay (vert)** : l'entrée est enregistrée en continu et rejouée en grains, TIME derrière la tête d'écriture. REGEN réinjecte la sortie delay et/ou la sortie des grains (Regen Mix).
+- **Auto Freeze (orange)** : à chaque note ou accord détecté, la pédale enregistre pendant TIME puis gèle le buffer. Les grains y puisent sans fin, ce qui donne une nappe qui évolue. Une nouvelle note remplace la précédente.
+- **Layers (rouge)** : jusqu'à 4 notes ou accords dans 4 buffers indépendants (le 5e remplace le plus ancien). TIME règle le fondu d'entrée (attaque) et REGEN le fondu de sortie (déclin), comme une voix de synthé. C'est le mode synthé polyphonique : monte REGEN pour tenir les notes.
+
 ## Utilisation
 
 | Action | Effet |
