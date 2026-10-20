@@ -21,11 +21,11 @@ namespace
     const Point<float> kModeBtn    { 684.0f, 69.0f };
     constexpr float    kBtnR       = 19.0f;
     const Point<float> kLed        { 544.7f, 583.7f };
-    const Point<float> kFootswitch { 544.7f, 715.2f };
+    const Point<float> kFootswitch { 544.7f, 895.3f };   // footswitch at the bottom
     constexpr float    kFootswitchR = 73.1f;
     const float        kPresetLedX[4] = { 454.1f, 500.7f, 547.2f, 592.6f };
-    constexpr float    kPresetLedY = 927.1f, kPresetLedR = 14.6f;
-    const Point<float> kPresetBtn  { 640.3f, 926.0f };
+    constexpr float    kPresetLedY = 754.2f, kPresetLedR = 14.6f;
+    const Point<float> kPresetBtn  { 640.3f, 753.1f };
     constexpr float    kPedalX = TexturalAudioProcessorEditor::kSideMargin;   // faceplate drawn from here
 
     // flashy, high-contrast LED colours (mode LED keeps the hue of its symbol)
@@ -529,7 +529,7 @@ void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
                              : (kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212));
     g.setColour (col.withAlpha (alpha));
     g.setFont (FontOptions (24.0f, Font::bold));
-    g.drawFittedText (txt, Rectangle<int> (284, 868, 521, 36), Justification::centred, 1, 0.75f);
+    g.drawFittedText (txt, Rectangle<int> (284, 695, 521, 36), Justification::centred, 1, 0.75f);
 }
 
 //==============================================================================
