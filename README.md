@@ -29,7 +29,7 @@ La LED du bouton prend la couleur du symbole du mode et clignote quand le son es
 | Maintien footswitch | Freeze momentané (Delay/Layers) ; en Auto Freeze, le maintien *dé-gèle*. Si *Footswitch Hold Mode* = Preset Scroll : maintien = entrer/sortir du défilement, clic = preset suivant |
 | Clic bouton PRESETS | Live → 1 … 8 → Live (LED verte = 1-4, rouge = 5-8, clignote si modifié) |
 | Maintien PRESETS 2 s | Copie des réglages ; clics = choix de l'emplacement ; maintien 2 s = sauvegarde |
-| Clic droit | Taille (Default 493 px, 60 %, 75 %, 100 %), sauvegarde/réinitialisation des presets |
+| Clic droit | Taille (Default 388 × 493 px, 60 % = 592 px, 75 % = 740 px, 100 % = 986 px ; même format que Freeze Shimmer, jamais plus petit que Default), sauvegarde/réinitialisation des presets |
 
 ### Paramètres secondaires (comme maintenir les boutons de la pédale)
 

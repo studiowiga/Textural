@@ -6,25 +6,26 @@ namespace
 {
     struct KnobPos { float x, y, r; bool orange; };
     // positions in design units (faceplate 595 x 1000)
-    // Layout in design units: the pedal photo (1058 x 1805 px) is scaled to 1000 units high
-    // and sits between two black side margins of 100 px each at the default 493 px height.
+    // Layout in design units: the pedal photo (1246 x 1805 px, widened between the knob columns
+    // to match Freeze Shimmer) is scaled to 1000 units high
+    // and sits between two side margins of 100 px each (pedal space, see pedalTransform()).
     const KnobPos kKnobs[6] = {
         { 321.7f, 162.6f, 64.0f, false },   // TIME
-        { 495.6f, 162.6f, 64.0f, false },   // SIZE
-        { 667.4f, 161.5f, 64.0f, false },   // OVERLAP
+        { 547.7f, 162.6f, 64.0f, false },   // SIZE
+        { 771.6f, 161.5f, 64.0f, false },   // OVERLAP
         { 320.0f, 333.2f, 64.0f, false },   // REGEN
-        { 491.8f, 330.2f, 64.0f, true  },   // PITCH
-        { 667.4f, 334.9f, 64.0f, false },   // MIX
+        { 543.9f, 330.2f, 64.0f, true  },   // PITCH
+        { 771.6f, 334.9f, 64.0f, false },   // MIX
     };
-    const Point<float> kReverseBtn { 408.1f, 69.0f };
-    const Point<float> kModeBtn    { 579.8f, 69.0f };
+    const Point<float> kReverseBtn { 460.2f, 69.0f };
+    const Point<float> kModeBtn    { 684.0f, 69.0f };
     constexpr float    kBtnR       = 19.0f;
-    const Point<float> kLed        { 492.6f, 583.7f };
-    const Point<float> kFootswitch { 492.6f, 715.2f };
+    const Point<float> kLed        { 544.7f, 583.7f };
+    const Point<float> kFootswitch { 544.7f, 715.2f };
     constexpr float    kFootswitchR = 73.1f;
-    const float        kPresetLedX[4] = { 402.0f, 448.6f, 495.1f, 540.5f };
+    const float        kPresetLedX[4] = { 454.1f, 500.7f, 547.2f, 592.6f };
     constexpr float    kPresetLedY = 927.1f, kPresetLedR = 14.6f;
-    const Point<float> kPresetBtn  { 588.2f, 926.0f };
+    const Point<float> kPresetBtn  { 640.3f, 926.0f };
     constexpr float    kPedalX = TexturalAudioProcessorEditor::kSideMargin;   // faceplate drawn from here
 
     // flashy, high-contrast LED colours (mode LED keeps the hue of its symbol)
@@ -59,10 +60,10 @@ TexturalAudioProcessorEditor::TexturalAudioProcessorEditor (TexturalAudioProcess
 
     setResizable (true, true);
     setResizeLimits (roundToInt (kDefaultH * kDesignW / kDesignH), kDefaultH,
-                     roundToInt (kDesignW), roundToInt (kDesignH));
+                     roundToInt (kMaxH * kDesignW / kDesignH), kMaxH);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio (kDesignW / kDesignH);
 
-    setHeightKeepingAspect (jlimit (kDefaultH, (int) kDesignH, proc.uiHeight.load()));
+    setHeightKeepingAspect (jlimit (kDefaultH, kMaxH, proc.uiHeight.load()));
     startTimerHz (30);
 }
 
@@ -70,12 +71,18 @@ TexturalAudioProcessorEditor::~TexturalAudioProcessorEditor() { stopTimer(); }
 
 void TexturalAudioProcessorEditor::setHeightKeepingAspect (int h)
 {
-    h = jlimit (kDefaultH, (int) kDesignH, h);
+    h = jlimit (kDefaultH, kMaxH, h);
     setSize (roundToInt ((float) h * kDesignW / kDesignH), h);
 }
 
 void TexturalAudioProcessorEditor::resized()
 {
+    // never smaller than the default size, whatever the host asks for
+    if (getHeight() < kDefaultH)
+    {
+        setHeightKeepingAspect (kDefaultH);
+        return;
+    }
     proc.uiHeight = getHeight();
 }
 
@@ -380,9 +387,9 @@ void TexturalAudioProcessorEditor::showMenu()
     const int h = getHeight();
     m.addSectionHeader ("Textural (Studio Wiga)");
     m.addItem (1, "Default size", true, h == kDefaultH);
-    m.addItem (2, "60%",  true, h == 600);
-    m.addItem (3, "75%",  true, h == 750);
-    m.addItem (4, "100%", true, h == 1000);
+    m.addItem (2, "60%",  true, h == kH60);
+    m.addItem (3, "75%",  true, h == kH75);
+    m.addItem (4, "100%", true, h == kH100);
     m.addSeparator();
 
     PopupMenu save;
@@ -406,9 +413,9 @@ void TexturalAudioProcessorEditor::showMenu()
         switch (r)
         {
             case 1: ed.setHeightKeepingAspect (kDefaultH); break;
-            case 2: ed.setHeightKeepingAspect (600);  break;
-            case 3: ed.setHeightKeepingAspect (750);  break;
-            case 4: ed.setHeightKeepingAspect (1000); break;
+            case 2: ed.setHeightKeepingAspect (kH60);  break;
+            case 3: ed.setHeightKeepingAspect (kH75);  break;
+            case 4: ed.setHeightKeepingAspect (kH100); break;
             case 21: ed.proc.resetPresetToFactory (ed.proc.currentPreset.load()); break;
             case 22: ed.proc.resetAllPresets(); break;
             case 23:
@@ -434,9 +441,9 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
     g.setImageResamplingQuality (Graphics::highResamplingQuality);
     g.setOpacity (1.0f);
     // black backdrop with a faint echo of the pedal's granular wave pattern
-    g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH));
+    g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH), RectanglePlacement::fillDestination);
     g.addTransform (pedalTransform());          // everything below belongs to the pedal
-    g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kDesignW - 2.0f * kPedalX, kDesignH));
+    g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kPedalSpaceW - 2.0f * kPedalX, kDesignH));
 
     const Layer layer = currentLayer();
     const auto blink = [this] (double hz) { return std::fmod (phase * hz, 1.0) < 0.5; };
@@ -522,7 +529,7 @@ void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
                              : (kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212));
     g.setColour (col.withAlpha (alpha));
     g.setFont (FontOptions (24.0f, Font::bold));
-    g.drawFittedText (txt, Rectangle<int> (232, 868, 521, 36), Justification::centred, 1, 0.75f);
+    g.drawFittedText (txt, Rectangle<int> (284, 868, 521, 36), Justification::centred, 1, 0.75f);
 }
 
 //==============================================================================

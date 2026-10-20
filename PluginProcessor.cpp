@@ -592,7 +592,7 @@ void TexturalAudioProcessor::setStateInformation (const void* data, int size)
     loadedSnapshot = stringToSnapshot (state.getProperty ("loaded").toString());
     currentPreset  = jlimit (0, kLastPreset, (int) state.getProperty ("preset", kLivePreset));
     if (currentPreset.load() == 0) currentPreset = kLivePreset;
-    uiHeight       = jlimit (493, 1000, (int) state.getProperty ("uiHeight", 493));
+    uiHeight       = jlimit (493, 1479, (int) state.getProperty ("uiHeight", 493));
     apvts.replaceState (state);
 }
 

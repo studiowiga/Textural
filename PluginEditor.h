@@ -29,10 +29,16 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
-    static constexpr float kSideMargin = 100.0f * 1000.0f / 493.0f;   // 100 px each side at default size
-    static constexpr float kDesignW = 1058.0f * 1000.0f / 1805.0f + 2.0f * kSideMargin;
+    // Window: same size and proportions as Freeze Shimmer (Studio Wiga), 780 x 990 artwork.
+    // Default 388 x 493 px, menu sizes 60 % / 75 % / 100 % = 592 / 740 / 986 px, drag up to 1479 px.
     static constexpr float kDesignH = 1000.0f;
-    static constexpr int   kDefaultH = 493;
+    static constexpr float kDesignW = 780.0f * kDesignH / 990.0f;
+    static constexpr int   kDefaultH = 493, kH60 = 592, kH75 = 740, kH100 = 986, kMaxH = 1479;
+    // Pedal space: the layout the control coordinates are given in (photo 1246 x 1805 scaled
+    // to 1000 units high, with a 202.8-unit margin on each side). It is mapped into the window
+    // by pedalTransform().
+    static constexpr float kSideMargin = 100.0f * 1000.0f / 493.0f;
+    static constexpr float kPedalSpaceW = 1246.0f * 1000.0f / 1805.0f + 2.0f * kSideMargin;
 
 private:
     enum class Layer { Main, Reverse, Mode, Foot };
@@ -40,13 +46,17 @@ private:
 
     void timerCallback() override;
     float scale() const { return (float) getHeight() / kDesignH; }
-    // the pedal is drawn slightly smaller than the window: 10 px free above and below at 493 px
-    static constexpr float kPedalGap   = 10.0f * 1000.0f / 493.0f;
-    static constexpr float kPedalScale = (1000.0f - 2.0f * kPedalGap) / 1000.0f;
+    // Pedal size and position copied from Freeze Shimmer: the enclosure is 601 x 928 in its
+    // 780 x 990 window (about 299 x 462 px at 493 px), starting 29/990 from the top.
+    // The photo's enclosure occupies rows 7..1797 and columns 44..1203 of 1246 x 1805 px,
+    // the same 601:928 proportions.
+    static constexpr float kBodyFrac   = 1790.0f / 1805.0f;
+    static constexpr float kPedalScale = (928.0f / 990.0f) / kBodyFrac;
+    static constexpr float kPedalTop   = 29.0f / 990.0f * kDesignH - kPedalScale * 7.0f / 1805.0f * kDesignH;
     static juce::AffineTransform pedalTransform()
     {
-        const float cx = kDesignW * 0.5f;
-        return juce::AffineTransform::translation (-cx, 0.0f).scaled (kPedalScale).translated (cx, kPedalGap);
+        return juce::AffineTransform::translation (-kPedalSpaceW * 0.5f, 0.0f)
+                   .scaled (kPedalScale).translated (kDesignW * 0.5f, kPedalTop);
     }
     juce::Point<float> toDesign (const juce::MouseEvent& e) const
     {
