@@ -69,6 +69,28 @@ TexturalAudioProcessorEditor::TexturalAudioProcessorEditor (TexturalAudioProcess
 
 TexturalAudioProcessorEditor::~TexturalAudioProcessorEditor() { stopTimer(); }
 
+//==============================================================================
+// Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
+// Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
+// le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+void TexturalAudioProcessorEditor::useSoftwareRenderer()
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+    {
+        int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
+        if (sw < 0) sw = 0;
+        if (peer->getCurrentRenderingEngine() != sw)
+            peer->setCurrentRenderingEngine (sw);
+    }
+   #endif
+}
+
+void TexturalAudioProcessorEditor::parentHierarchyChanged()
+{
+    useSoftwareRenderer();
+}
+
 void TexturalAudioProcessorEditor::setHeightKeepingAspect (int h)
 {
     h = jlimit (kDefaultH, kMaxH, h);
@@ -78,7 +100,9 @@ void TexturalAudioProcessorEditor::setHeightKeepingAspect (int h)
 void TexturalAudioProcessorEditor::resized()
 {
     // never smaller than the default size, whatever the host asks for
-    if (getHeight() < kDefaultH)
+    // tolérance de 2 px : avec la mise à l'échelle Windows (125 %, 150 %…) l'hôte arrondit les tailles ;
+    // sans marge, les deux se renvoient la fenêtre en boucle
+    if (getHeight() < kDefaultH - 2)
     {
         setHeightKeepingAspect (kDefaultH);
         return;
@@ -377,7 +401,121 @@ void TexturalAudioProcessorEditor::timerCallback()
 
     if (presetScrollMode && nowMs() > presetScrollUntil) presetScrollMode = false;
     if (copyMode && nowMs() > copyUntil) copyMode = false;
-    repaint();
+
+    useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
+
+    // on ne redessine une zone que si ce qu'elle affiche a vraiment changé (zéro travail au repos)
+    auto changed = [] (float& drawn, float now) { if (std::abs (drawn - now) < 0.002f) return false; drawn = now; return true; };
+    auto colourChanged = [] (Colour& drawn, Colour now) { if (drawn == now) return false; drawn = now; return true; };
+
+    const Layer layer = currentLayer();
+
+    for (int i = 0; i < 6; ++i)
+        if (changed (drawnKnob[i], knobValue (layer, i)))
+            repaint (pedalZone ({ kKnobs[i].x, kKnobs[i].y }, 72.0f));
+
+    if (changed (drawnReverse, reverseAmount (layer)))
+        repaint (pedalZone (kReverseBtn, kBtnR * 2.2f));
+
+    {
+        Colour c; float amt;
+        modeLedState (layer, c, amt);
+        const bool a = changed (drawnMode, amt);
+        const bool b = colourChanged (drawnModeColour, c);
+        if (a || b) repaint (pedalZone (kModeBtn, kBtnR * 2.2f));
+    }
+
+    if (changed (drawnLed, statusLedAmount (layer)))
+        repaint (pedalZone (kLed, 44.0f));
+
+    const bool pressChanged = pressedHit != drawnPressed;
+    if (pressChanged)
+    {
+        if (pressedHit == Hit::Footswitch || drawnPressed == Hit::Footswitch) repaint (pedalZone (kFootswitch, kFootswitchR + 4.0f));
+        if (pressedHit == Hit::PresetBtn  || drawnPressed == Hit::PresetBtn)  repaint (pedalZone (kPresetBtn, 18.0f));
+        drawnPressed = pressedHit;
+    }
+
+    {
+        const int cur = copyMode ? copyTarget : proc.currentPreset.load();
+        const bool modified = ! copyMode && proc.isPresetModified();
+        for (int i = 0; i < 4; ++i)
+        {
+            Colour c; float on;
+            presetLedState (i, cur, modified, c, on);
+            const bool a = changed (drawnPresetLed[i], on);
+            const bool b = colourChanged (drawnPresetColour[i], c);
+            if (a || b) repaint (pedalZone ({ kPresetLedX[i], kPresetLedY }, kPresetLedR * 2.2f));
+        }
+    }
+
+    {
+        String txt; Colour col; float alpha = 0.0f;
+        if (! statusLineState (txt, col, alpha)) { txt.clear(); alpha = 0.0f; }
+        const bool a = changed (drawnStatusAlpha, alpha);
+        const bool b = colourChanged (drawnStatusColour, col);
+        if (a || b || txt != drawnStatus)
+        {
+            drawnStatus = txt;
+            const auto r = Rectangle<float> (284.0f, 695.0f, 521.0f, 36.0f).expanded (8.0f)
+                               .transformedBy (pedalTransform().scaled (scale()));
+            repaint (r.getSmallestIntegerContainer().expanded (2));
+        }
+    }
+}
+
+// zone de la fenêtre (pixels) couvrant un disque de rayon r donné dans l'espace de la pédale
+Rectangle<int> TexturalAudioProcessorEditor::pedalZone (Point<float> c, float r) const
+{
+    return Rectangle<float> (c.x - r, c.y - r, r * 2.0f, r * 2.0f)
+               .transformedBy (pedalTransform().scaled (scale()))
+               .getSmallestIntegerContainer().expanded (2);
+}
+
+float TexturalAudioProcessorEditor::knobValue (Layer layer, int i) const
+{
+    const auto id = knobParamID (layer, i);
+    return id.isNotEmpty() ? proc.param (id)->getValue() : 0.5f;
+}
+
+float TexturalAudioProcessorEditor::reverseAmount (Layer layer) const
+{
+    float amt = proc.value (PID::reverse) > 0.5f ? 0.85f : 0.0f;
+    if (layer == Layer::Reverse) amt = blink (2.5) ? 1.0f : 0.35f;
+    return amt;
+}
+
+void TexturalAudioProcessorEditor::modeLedState (Layer layer, Colour& c, float& amt) const
+{
+    // MODE button (LED takes the colour of the active mode symbol, flashes when frozen)
+    const int m = jlimit (0, 2, roundToInt (proc.value (PID::mode)));
+    c = kModeColours[m];
+    amt = 0.9f;
+    if (proc.value (PID::bypass) < 0.5f && proc.isFrozen()) amt = blink (3.0) ? 1.0f : 0.15f;
+    if (layer == Layer::Mode) { c = Colour (0xff6dff6d); amt = blink (2.5) ? 1.0f : 0.4f; }
+}
+
+float TexturalAudioProcessorEditor::statusLedAmount (Layer layer) const
+{
+    const float soft = 0.55f + 0.45f * (float) std::sin (phase * MathConstants<double>::twoPi * 1.2);
+    float on = proc.value (PID::bypass) < 0.5f ? 1.0f : 0.0f;
+    if (presetScrollMode) on = soft;
+    if (layer == Layer::Foot) on = blink (2.5) ? 1.0f : 0.2f;
+    return on;
+}
+
+void TexturalAudioProcessorEditor::presetLedState (int i, int cur, bool modified, Colour& c, float& on) const
+{
+    // preset LEDs: 1-4 green, 5-8 red
+    on = 0.0f;
+    c = kPresetGreen;
+    if (cur >= 1 && cur <= 8 && ((cur - 1) % 4) == i)
+    {
+        c = cur <= 4 ? kPresetGreen : kPresetRed;
+        on = 1.0f;
+        if (copyMode)       on = blink (6.0) ? 1.0f : 0.0f;
+        else if (modified)  on = blink (2.0) ? 1.0f : 0.15f;
+    }
 }
 
 //==============================================================================
@@ -446,42 +584,27 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
     g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kPedalSpaceW - 2.0f * kPedalX, kDesignH));
 
     const Layer layer = currentLayer();
-    const auto blink = [this] (double hz) { return std::fmod (phase * hz, 1.0) < 0.5; };
-    const float soft = 0.55f + 0.45f * (float) std::sin (phase * MathConstants<double>::twoPi * 1.2);
 
     // knobs
     for (int i = 0; i < 6; ++i)
     {
-        const auto id = knobParamID (layer, i);
-        const float v = id.isNotEmpty() ? proc.param (id)->getValue() : 0.5f;
+        const float v = knobValue (layer, i);
         const float angle = degreesToRadians (-135.0f + 270.0f * v);
         drawKnob (g, { kKnobs[i].x, kKnobs[i].y }, kKnobs[i].r, angle, kKnobs[i].orange);
     }
 
     // REVERSE button
-    {
-        float amt = proc.value (PID::reverse) > 0.5f ? 0.85f : 0.0f;
-        if (layer == Layer::Reverse) amt = blink (2.5) ? 1.0f : 0.35f;
-        drawRoundButton (g, kReverseBtn, kBtnR, kReverseColour, amt);
-    }
+    drawRoundButton (g, kReverseBtn, kBtnR, kReverseColour, reverseAmount (layer));
 
     // MODE button (LED takes the colour of the active mode symbol, flashes when frozen)
     {
-        const int m = jlimit (0, 2, roundToInt (proc.value (PID::mode)));
-        Colour c = kModeColours[m];
-        float amt = 0.9f;
-        if (proc.value (PID::bypass) < 0.5f && proc.isFrozen()) amt = blink (3.0) ? 1.0f : 0.15f;
-        if (layer == Layer::Mode) { c = Colour (0xff6dff6d); amt = blink (2.5) ? 1.0f : 0.4f; }
+        Colour c; float amt;
+        modeLedState (layer, c, amt);
         drawRoundButton (g, kModeBtn, kBtnR, c, amt);
     }
 
     // status LED above the footswitch
-    {
-        float on = proc.value (PID::bypass) < 0.5f ? 1.0f : 0.0f;
-        if (presetScrollMode) on = soft;
-        if (layer == Layer::Foot) on = blink (2.5) ? 1.0f : 0.2f;
-        drawStatusLed (g, kLed, on);
-    }
+    drawStatusLed (g, kLed, statusLedAmount (layer));
 
     drawFootswitch (g, kFootswitch, pressedHit == Hit::Footswitch);
 
@@ -491,15 +614,8 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
         const bool modified = ! copyMode && proc.isPresetModified();
         for (int i = 0; i < 4; ++i)
         {
-            float on = 0.0f;
-            Colour c = kPresetGreen;
-            if (cur >= 1 && cur <= 8 && ((cur - 1) % 4) == i)
-            {
-                c = cur <= 4 ? kPresetGreen : kPresetRed;
-                on = 1.0f;
-                if (copyMode)       on = blink (6.0) ? 1.0f : 0.0f;
-                else if (modified)  on = blink (2.0) ? 1.0f : 0.15f;
-            }
+            Colour c; float on;
+            presetLedState (i, cur, modified, c, on);
             drawPresetLed (g, { kPresetLedX[i], kPresetLedY }, c, on);
         }
         drawPresetButton (g, kPresetBtn, pressedHit == Hit::PresetBtn);
@@ -508,25 +624,32 @@ void TexturalAudioProcessorEditor::paint (Graphics& g)
     drawStatusLine (g);
 }
 
-void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
+bool TexturalAudioProcessorEditor::statusLineState (String& txt, Colour& col, float& alpha) const
 {
     // nothing is shown until a knob is turned (or a button pressed); only that setting is displayed
     const bool isMsg = statusMsg.isNotEmpty();
-    if (! isMsg && (statusKnob < 0 || statusParam.isEmpty())) return;
+    if (! isMsg && (statusKnob < 0 || statusParam.isEmpty())) return false;
     const double age = nowMs() - statusMs;
     const bool turning = dragKnob >= 0 && dragKnob == statusKnob;
-    float alpha = 1.0f;
+    alpha = 1.0f;
     if (! turning)
     {
-        if (age > 1600.0) return;
+        if (age > 1600.0) return false;
         if (age > 1100.0) alpha = (float) (1.0 - (age - 1100.0) / 500.0);
     }
 
-    const String txt = isMsg ? statusMsg : proc.describe (statusParam);
+    txt = isMsg ? statusMsg : proc.describe (statusParam);
 
     // text takes the colour of the knob being turned
-    const Colour col = isMsg ? statusMsgColour
-                             : (kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212));
+    col = isMsg ? statusMsgColour
+                : (kKnobs[statusKnob].orange ? Colour (0xfff26d0f) : Colour (0xff121212));
+    return true;
+}
+
+void TexturalAudioProcessorEditor::drawStatusLine (Graphics& g) const
+{
+    String txt; Colour col; float alpha = 1.0f;
+    if (! statusLineState (txt, col, alpha)) return;
     g.setColour (col.withAlpha (alpha));
     g.setFont (FontOptions (24.0f, Font::bold));
     g.drawFittedText (txt, Rectangle<int> (284, 695, 521, 36), Justification::centred, 1, 0.75f);

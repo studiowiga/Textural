@@ -21,6 +21,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void parentHierarchyChanged() override;
 
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -45,6 +46,7 @@ private:
     enum class Hit { None, Knob, ReverseBtn, ModeBtn, Footswitch, Led, PresetBtn };
 
     void timerCallback() override;
+    void useSoftwareRenderer();
     float scale() const { return (float) getHeight() / kDesignH; }
     // Pedal size and position copied from Freeze Shimmer: the enclosure is 601 x 928 in its
     // 780 x 990 window (about 299 x 462 px at 493 px), starting 29/990 from the top.
@@ -81,6 +83,16 @@ private:
     void drawPresetLed (juce::Graphics&, juce::Point<float> c, juce::Colour col, float on) const;
     void drawPresetButton (juce::Graphics&, juce::Point<float> c, bool pressed) const;
     void drawStatusLine (juce::Graphics&) const;
+    bool statusLineState (juce::String& txt, juce::Colour& col, float& alpha) const;
+
+    // état affiché des éléments animés (partagé par paint() et timerCallback())
+    bool  blink (double hz) const { return std::fmod (phase * hz, 1.0) < 0.5; }
+    float knobValue (Layer, int knob) const;
+    float reverseAmount (Layer) const;
+    void  modeLedState (Layer, juce::Colour& c, float& amt) const;
+    float statusLedAmount (Layer) const;
+    void  presetLedState (int i, int cur, bool modified, juce::Colour& c, float& on) const;
+    juce::Rectangle<int> pedalZone (juce::Point<float> c, float r) const;
 
     TexturalAudioProcessor& proc;
     juce::Image faceplate, footswitchImg, backgroundImg;
@@ -112,6 +124,14 @@ private:
     juce::String lastTouched;
     double lastTouchedMs = 0;
     double phase = 0;
+
+    // dernier état réellement dessiné : on ne redessine une zone que si elle a changé
+    float drawnKnob[6] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+    float drawnReverse = -1.0f, drawnMode = -1.0f, drawnLed = -1.0f, drawnStatusAlpha = -1.0f;
+    float drawnPresetLed[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    juce::Colour drawnModeColour, drawnPresetColour[4], drawnStatusColour;
+    juce::String drawnStatus;
+    Hit drawnPressed = Hit::None;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TexturalAudioProcessorEditor)
 };
