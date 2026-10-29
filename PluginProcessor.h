@@ -10,11 +10,11 @@
 //  Textural (Studio Wiga) - granular synth engine pedal, VST3
 //==============================================================================
 class TexturalAudioProcessor : public juce::AudioProcessor,
-                               private juce::AsyncUpdater
+                               private juce::Timer
 {
 public:
     TexturalAudioProcessor();
-    ~TexturalAudioProcessor() override = default;
+    ~TexturalAudioProcessor() override { stopTimer(); }
 
     //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -81,7 +81,7 @@ public:
     int  activeLayers() const   { return engine.layersActive.load(); }
 
 private:
-    void handleAsyncUpdate() override;
+    void timerCallback() override;
     void handleMidi (const juce::MidiBuffer&);
     void applySnapshot (const std::map<juce::String, float>&);
     std::map<juce::String, float> takeSnapshot() const;
@@ -97,6 +97,24 @@ private:
 
     std::array<std::map<juce::String, float>, 8> userPresets;
     std::map<juce::String, float> liveSnapshot, loadedSnapshot;
+
+    // Anti-gel v2 (Studio Wiga): MIDI CC values queued by the audio thread (index = ccMap() entry),
+    // sent to the host by the processor timer (60 Hz, message thread)
+    static constexpr int kMaxQueued = 32;
+    std::atomic<float> pendingValue[kMaxQueued];
+    std::atomic<bool>  pendingSet[kMaxQueued];
+    bool ccIsBool[kMaxQueued] {};
+
+    // raw parameter values read by the audio thread (looked up once in the constructor)
+    struct Raw
+    {
+        std::atomic<float> *time = nullptr, *size = nullptr, *overlap = nullptr, *regen = nullptr, *pitch = nullptr, *mix = nullptr,
+                           *reverse = nullptr, *mode = nullptr, *bypass = nullptr, *freeze = nullptr,
+                           *timeRnd = nullptr, *sizeRnd = nullptr, *overlapRnd = nullptr, *regenMix = nullptr, *pitchRnd = nullptr,
+                           *reverseRnd = nullptr, *reverbMix = nullptr, *reverbDecay = nullptr, *cutoff = nullptr, *quantize = nullptr,
+                           *vibRate = nullptr, *vibDepth = nullptr, *trails = nullptr, *outputMode = nullptr, *outputGain = nullptr;
+    } raw;
+    static float rv (const std::atomic<float>* p) { return p->load (std::memory_order_relaxed); }
 
     // async requests from the audio thread
     std::atomic<int>   pendingPreset { -1 };

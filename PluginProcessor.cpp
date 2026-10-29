@@ -65,6 +65,22 @@ TexturalAudioProcessor::TexturalAudioProcessor()
 {
     bypassParam = dynamic_cast<AudioParameterBool*> (apvts.getParameter (PID::bypass));
 
+    auto rp = [this] (const String& id) { return apvts.getRawParameterValue (id); };
+    raw.time = rp (PID::time);           raw.size = rp (PID::size);             raw.overlap = rp (PID::overlap);
+    raw.regen = rp (PID::regen);         raw.pitch = rp (PID::pitch);           raw.mix = rp (PID::mix);
+    raw.reverse = rp (PID::reverse);     raw.mode = rp (PID::mode);             raw.bypass = rp (PID::bypass);
+    raw.freeze = rp (PID::freeze);       raw.timeRnd = rp (PID::timeRnd);       raw.sizeRnd = rp (PID::sizeRnd);
+    raw.overlapRnd = rp (PID::overlapRnd); raw.regenMix = rp (PID::regenMix);   raw.pitchRnd = rp (PID::pitchRnd);
+    raw.reverseRnd = rp (PID::reverseRnd); raw.reverbMix = rp (PID::reverbMix); raw.reverbDecay = rp (PID::reverbDecay);
+    raw.cutoff = rp (PID::cutoff);       raw.quantize = rp (PID::quantize);     raw.vibRate = rp (PID::vibRate);
+    raw.vibDepth = rp (PID::vibDepth);   raw.trails = rp (PID::trails);         raw.outputMode = rp (PID::outputMode);
+    raw.outputGain = rp (PID::outputGain);
+
+    jassert ((int) ccMap().size() <= kMaxQueued);
+    for (int i = 0; i < kMaxQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    for (int i = 0; i < jmin (kMaxQueued, (int) ccMap().size()); ++i)
+        ccIsBool[i] = dynamic_cast<AudioParameterBool*> (apvts.getParameter (*ccMap()[(size_t) i].id)) != nullptr;
+
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<RangedAudioParameter*> (p))
             if (! isGlobalSetting (rp->paramID))
@@ -75,6 +91,7 @@ TexturalAudioProcessor::TexturalAudioProcessor()
     liveSnapshot = takeSnapshot();
     currentPreset = kLivePreset;
     selectPreset (1);                       // the pedal opens on preset 1 (Sea Synth)
+    startTimerHz (60);
 }
 
 const String TexturalAudioProcessor::getProgramName (int index)
@@ -118,10 +135,13 @@ void TexturalAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dryG.setCurrentAndTargetValue (Map::dryGain (value (PID::mix)));
     rvMix.setCurrentAndTargetValue (value (PID::reverbMix));
     outGain.setCurrentAndTargetValue (Decibels::decibelsToGain (Map::outputDb (value (PID::outputGain))));
-    engageFade = value (PID::bypass) > 0.5f ? 0.0f : 1.0f;
+    engageFade = rv (raw.bypass) > 0.5f ? 0.0f : 1.0f;
 }
 
 //==============================================================================
+// Anti-gel v2 (Studio Wiga): no host call (setValueNotifyingHost, triggerAsyncUpdate), no string
+// lookup and no allocation on the audio thread. MIDI values are queued; the processor timer
+// (60 Hz, message thread) sends them to the host and handles presets / tap tempo.
 void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
 {
     for (const auto meta : midi)
@@ -130,7 +150,6 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         if (m.isProgramChange())
         {
             pendingPreset = jlimit (0, kLastPreset, m.getProgramChangeNumber());   // 0 = Live too
-            triggerAsyncUpdate();
             continue;
         }
         if (! m.isController()) continue;
@@ -140,18 +159,17 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         lastMidiCC = cc; lastMidiValue = v; lastMidiTime = Time::getMillisecondCounterHiRes();
 
         if (cc == kCCTap)        { if (v >= 64) tap(); continue; }
-        if (cc == kCCPresetNext) { if (v >= 64) { pendingPresetStep = pendingPresetStep + 1; triggerAsyncUpdate(); } continue; }
+        if (cc == kCCPresetNext) { if (v >= 64) pendingPresetStep.fetch_add (1); continue; }
 
-        for (auto& e : ccMap())
+        const auto& map = ccMap();
+        for (int i = 0; i < jmin (kMaxQueued, (int) map.size()); ++i)
         {
-            if (e.cc != cc) continue;
-            if (auto* p = apvts.getParameter (*e.id))
-            {
-                float norm = (float) v / 127.0f;
-                if (*e.id == PID::bypass) norm = v >= 64 ? 0.0f : 1.0f;      // CC82 >= 64 = effect ON
-                else if (dynamic_cast<AudioParameterBool*> (p) != nullptr) norm = v >= 64 ? 1.0f : 0.0f;
-                p->setValueNotifyingHost (norm);
-            }
+            if (map[(size_t) i].cc != cc) continue;
+            float norm = (float) v / 127.0f;
+            if (cc == 82) norm = v >= 64 ? 0.0f : 1.0f;                       // CC82 (bypass) >= 64 = effect ON
+            else if (ccIsBool[i]) norm = v >= 64 ? 1.0f : 0.0f;
+            pendingValue[i].store (norm, std::memory_order_relaxed);
+            pendingSet[i].store (true, std::memory_order_release);
         }
     }
 }
@@ -176,37 +194,37 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     const float* inR = buffer.getReadPointer (numOut > 1 ? 1 : 0);
 
     // overlap knob moved after a tap -> OVERLAP takes control again
-    const float ov = value (PID::overlap);
+    const float ov = rv (raw.overlap);
     if (tapSpacing.load() > 0.0f && std::abs (ov - overlapAtTap.load()) > 0.003f) tapSpacing = 0.0f;
 
     if (clearRequested.exchange (false)) { engine.reset(); reverb.reset(); preReverb.reset(); diffuser.reset(); vibrato.reset(); filter.reset(); }
 
-    const bool engaged = value (PID::bypass) < 0.5f;
-    const bool trails  = value (PID::trails) > 0.5f;
-    const auto outMode = (OutMode) roundToInt (value (PID::outputMode));
+    const bool engaged = rv (raw.bypass) < 0.5f;
+    const bool trails  = rv (raw.trails) > 0.5f;
+    const auto outMode = (OutMode) roundToInt (rv (raw.outputMode));
 
     EngineParams ep;
-    ep.mode       = currentMode();
-    ep.time       = value (PID::time);
-    ep.size       = value (PID::size);
+    ep.mode       = (Mode) roundToInt (rv (raw.mode));
+    ep.time       = rv (raw.time);
+    ep.size       = rv (raw.size);
     ep.overlap    = ov;
-    ep.regen      = value (PID::regen);
-    ep.pitch      = value (PID::pitch);
-    ep.reverse    = value (PID::reverse) > 0.5f;
-    ep.freeze     = engaged && value (PID::freeze) > 0.5f;   // freeze disengages on bypass
-    ep.timeRnd    = value (PID::timeRnd);
-    ep.sizeRnd    = value (PID::sizeRnd);
-    ep.overlapRnd = value (PID::overlapRnd);
-    ep.regenMix   = value (PID::regenMix);
-    ep.pitchRnd   = value (PID::pitchRnd);
-    ep.reverseRnd = value (PID::reverseRnd);
-    ep.quantize   = value (PID::quantize) > 0.5f;
+    ep.regen      = rv (raw.regen);
+    ep.pitch      = rv (raw.pitch);
+    ep.reverse    = rv (raw.reverse) > 0.5f;
+    ep.freeze     = engaged && rv (raw.freeze) > 0.5f;   // freeze disengages on bypass
+    ep.timeRnd    = rv (raw.timeRnd);
+    ep.sizeRnd    = rv (raw.sizeRnd);
+    ep.overlapRnd = rv (raw.overlapRnd);
+    ep.regenMix   = rv (raw.regenMix);
+    ep.pitchRnd   = rv (raw.pitchRnd);
+    ep.reverseRnd = rv (raw.reverseRnd);
+    ep.quantize   = rv (raw.quantize) > 0.5f;
     ep.stereo     = outMode == OutMode::Stereo;
     ep.tapSpacing = tapSpacing.load();
     ep.inputMuted = ! engaged && trails;
-    ep.mix        = value (PID::mix);
-    ep.cutoff     = value (PID::cutoff);
-    ep.vibDepth   = value (PID::vibDepth);
+    ep.mix        = rv (raw.mix);
+    ep.cutoff     = rv (raw.cutoff);
+    ep.vibDepth   = rv (raw.vibDepth);
 
     // bypass without trails: fade out, then mute and clear
     const bool processFx = engaged || trails || engageFade > 0.0f;
@@ -220,8 +238,8 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     // REVERSE REVERB: with REVERSE on, the reverb is also placed before the grains,
     // so reversed grains replay reverb tails backwards (swelling "reverse reverb").
     preAmt.setTargetValue (0.0f);   // reverse plays the recorded guitar itself backwards (no pre-reverb)
-    preReverb.setTone (value (PID::cutoff));
-    preReverb.setDecay (jmin (12.0f, Map::reverbRT60 (value (PID::reverbDecay))));
+    preReverb.setTone (rv (raw.cutoff));
+    preReverb.setDecay (jmin (12.0f, Map::reverbRT60 (rv (raw.reverbDecay))));
     {
         float* rl = recBuffer.getWritePointer (0);
         float* rr = recBuffer.getWritePointer (1);
@@ -245,15 +263,15 @@ void TexturalAudioProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffe
     // the denser the cloud, the more the grains are blurred together (planing texture)
     diffAmt.setTargetValue (jlimit (0.0f, 0.75f, (Map::overlapCount (ov) - 3.0f) / 16.0f));
 
-    const float mix = value (PID::mix);
+    const float mix = rv (raw.mix);
     wetG.setTargetValue (Map::wetGain (mix));
     dryG.setTargetValue (engaged ? Map::dryGain (mix) : 1.0f);
-    rvMix.setTargetValue (value (PID::reverbMix));
-    outGain.setTargetValue (Decibels::decibelsToGain (Map::outputDb (value (PID::outputGain))));
-    filter.setKnob (value (PID::cutoff));
-    vibrato.set (Map::vibratoHz (value (PID::vibRate)), Map::vibratoMs (value (PID::vibDepth)));
-    reverb.setTone (value (PID::cutoff));
-    reverb.setDecay (Map::reverbRT60 (value (PID::reverbDecay)));
+    rvMix.setTargetValue (rv (raw.reverbMix));
+    outGain.setTargetValue (Decibels::decibelsToGain (Map::outputDb (rv (raw.outputGain))));
+    filter.setKnob (rv (raw.cutoff));
+    vibrato.set (Map::vibratoHz (rv (raw.vibRate)), Map::vibratoMs (rv (raw.vibDepth)));
+    reverb.setTone (rv (raw.cutoff));
+    reverb.setDecay (Map::reverbRT60 (rv (raw.reverbDecay)));
 
     const float fadeStep = 1.0f / (0.015f * (float) sr);
     const float* wl = wetBuffer.getReadPointer (0);
@@ -488,13 +506,18 @@ void TexturalAudioProcessor::tap()
 
     tapBpm = (float) (60000.0 / avg);
     tapSpacing = (float) (avg / 1000.0 / 2.0);          // grains on eighth notes
-    overlapAtTap = value (PID::overlap);
-    pendingTapSeconds = (float) (avg / 1000.0);
-    triggerAsyncUpdate();
+    overlapAtTap = rv (raw.overlap);                   // tap() may run on the audio thread (MIDI CC83): no string lookup
+    pendingTapSeconds = (float) (avg / 1000.0);      // applied by the timer (message thread)
 }
 
-void TexturalAudioProcessor::handleAsyncUpdate()
+void TexturalAudioProcessor::timerCallback()
 {
+    const auto& map = ccMap();
+    for (int i = 0; i < jmin (kMaxQueued, (int) map.size()); ++i)
+        if (pendingSet[i].exchange (false, std::memory_order_acquire))
+            if (auto* p = apvts.getParameter (*map[(size_t) i].id))
+                p->setValueNotifyingHost (pendingValue[i].load (std::memory_order_relaxed));
+
     const int p = pendingPreset.exchange (-1);
     if (p >= 0) selectPreset (p);
 

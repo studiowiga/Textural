@@ -102,3 +102,7 @@ Rouges :
 - **Mode Layers** : saturation douce de type synthé analogique.
 
 Les presets utilisateur sont enregistrés dans le projet du DAW et dans `%APPDATA%\Studio Wiga\Textural\UserPresets.xml`.
+
+## Versions
+
+- v1.1.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)

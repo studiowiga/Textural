@@ -46,7 +46,18 @@ private:
     enum class Hit { None, Knob, ReverseBtn, ModeBtn, Footswitch, Led, PresetBtn };
 
     void timerCallback() override;
+    void visibilityChanged() override;
     void useSoftwareRenderer();
+    // anti-gel v2: background + faceplate composed at window size (physical pixels), rebuilt by the timer only
+    void rebuildCaches (float scale = 0.0f);
+    float physicalScale() const;
+    void askRepaint (juce::Rectangle<int> r);
+    juce::Image bgCache;
+    int cacheW = 0, cacheH = 0;
+    float cacheScale = 0.0f;
+    int resizeSettle = 0;
+    void* lastPeer = nullptr;
+    double lastPaintMs = 0.0, repaintAskedMs = 0.0, lastScaleCheckMs = 0.0, lastRendererCheckMs = 0.0;
     float scale() const { return (float) getHeight() / kDesignH; }
     // Pedal size and position copied from Freeze Shimmer: the enclosure is 601 x 928 in its
     // 780 x 990 window (about 299 x 462 px at 493 px), starting 29/990 from the top.

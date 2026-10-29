@@ -62,8 +62,10 @@ TexturalAudioProcessorEditor::TexturalAudioProcessorEditor (TexturalAudioProcess
     setResizeLimits (roundToInt (kDefaultH * kDesignW / kDesignH), kDefaultH,
                      roundToInt (kMaxH * kDesignW / kDesignH), kMaxH);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio (kDesignW / kDesignH);
+    setOpaque (true);                      // anti-gel : l'hôte ne redessine jamais ce qui est derrière la fenêtre
 
     setHeightKeepingAspect (jlimit (kDefaultH, kMaxH, proc.uiHeight.load()));
+    rebuildCaches();
     startTimerHz (30);
 }
 
@@ -73,10 +75,22 @@ TexturalAudioProcessorEditor::~TexturalAudioProcessorEditor() { stopTimer(); }
 // Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
 // Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
 // le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+//
+// Anti-gel v2 (Studio Wiga) :
+//  1. moteur de rendu logiciel forcé sur Windows, appliqué à chaque nouvelle fenêtre hôte (peer)
+//     et revérifié toutes les secondes, jamais en boucle ;
+//  2. aucun calcul lourd dans paint() : le fond + la façade sont composés à la taille de la fenêtre
+//     par le timer seulement, après stabilisation de la taille ou quand l'échelle d'affichage change
+//     (au plus toutes les 250 ms) ;
+//  3. chien de garde : si un redessin demandé n'est pas arrivé au bout de 1,5 s alors que la fenêtre
+//     est visible, le moteur de rendu est réappliqué et toute la fenêtre est redessinée ;
+//  4. côté audio : aucun appel à l'hôte depuis le thread audio (voir PluginProcessor).
 void TexturalAudioProcessorEditor::useSoftwareRenderer()
 {
+    auto* peer = getPeer();
+    if (peer != lastPeer) { lastPeer = peer; repaint(); }
    #if JUCE_WINDOWS
-    if (auto* peer = getPeer())
+    if (peer != nullptr)
     {
         int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
         if (sw < 0) sw = 0;
@@ -86,9 +100,44 @@ void TexturalAudioProcessorEditor::useSoftwareRenderer()
    #endif
 }
 
-void TexturalAudioProcessorEditor::parentHierarchyChanged()
+void TexturalAudioProcessorEditor::parentHierarchyChanged() { useSoftwareRenderer(); }
+void TexturalAudioProcessorEditor::visibilityChanged()      { useSoftwareRenderer(); if (isShowing()) repaint(); }
+
+void TexturalAudioProcessorEditor::askRepaint (Rectangle<int> r)
 {
-    useSoftwareRenderer();
+    if (repaintAskedMs <= 0.0) repaintAskedMs = Time::getMillisecondCounterHiRes();
+    repaint (r);
+}
+
+float TexturalAudioProcessorEditor::physicalScale() const
+{
+    return jlimit (1.0f, 4.0f, (float) Component::getApproximateScaleFactorForComponent (this));
+}
+
+// fond + façade composés une fois par taille / échelle (constructeur et timer, jamais dans paint)
+void TexturalAudioProcessorEditor::rebuildCaches (float sc)
+{
+    if (sc <= 0.0f) sc = cacheScale > 0.0f ? cacheScale : physicalScale();
+    const int w = getWidth(), h = getHeight();
+    if (w <= 0 || h <= 0) return;
+    if (w == cacheW && h == cacheH && std::abs (sc - cacheScale) < 0.01f && bgCache.isValid()) return;
+
+    cacheW = w; cacheH = h; cacheScale = sc;
+    const int pw = roundToInt ((float) w * sc), ph = roundToInt ((float) h * sc);
+    Image img (Image::RGB, jmax (1, pw), jmax (1, ph), true);
+    {
+        Graphics g (img);
+        g.fillAll (Colours::black);
+        g.addTransform (AffineTransform::scale ((float) pw / (float) w, (float) ph / (float) h));
+        g.addTransform (AffineTransform::scale (scale()));
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
+        g.setOpacity (1.0f);
+        g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH), RectanglePlacement::fillDestination);
+        g.addTransform (pedalTransform());
+        g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kPedalSpaceW - 2.0f * kPedalX, kDesignH));
+    }
+    bgCache = img;
+    repaint();
 }
 
 void TexturalAudioProcessorEditor::setHeightKeepingAspect (int h)
@@ -99,15 +148,10 @@ void TexturalAudioProcessorEditor::setHeightKeepingAspect (int h)
 
 void TexturalAudioProcessorEditor::resized()
 {
-    // never smaller than the default size, whatever the host asks for
-    // tolérance de 2 px : avec la mise à l'échelle Windows (125 %, 150 %…) l'hôte arrondit les tailles ;
-    // sans marge, les deux se renvoient la fenêtre en boucle
-    if (getHeight() < kDefaultH - 2)
-    {
-        setHeightKeepingAspect (kDefaultH);
-        return;
-    }
-    proc.uiHeight = getHeight();
+    // anti-gel : jamais de setSize ici (mise à l'échelle Windows 125 / 150 % : l'hôte arrondit les tailles) ;
+    // les limites du constrainer (jamais plus petit que la taille par défaut) suffisent
+    proc.uiHeight = jlimit (kDefaultH, kMaxH, getHeight());
+    resizeSettle = 4;              // le fond sera recomposé par le timer quand la taille ne bouge plus
 }
 
 //==============================================================================
@@ -402,7 +446,27 @@ void TexturalAudioProcessorEditor::timerCallback()
     if (presetScrollMode && nowMs() > presetScrollUntil) presetScrollMode = false;
     if (copyMode && nowMs() > copyUntil) copyMode = false;
 
-    useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
+    // moteur logiciel : seulement si la fenêtre hôte a changé, ou au plus une fois par seconde
+    const double now = nowMs();
+    if (getPeer() != lastPeer || now - lastRendererCheckMs > 1000.0) { lastRendererCheckMs = now; useSoftwareRenderer(); }
+
+    // caches : reconstruits ici seulement (jamais dans paint)
+    if (resizeSettle > 0 && --resizeSettle == 0) rebuildCaches();
+    else if (resizeSettle == 0 && now - lastScaleCheckMs > 250.0)
+    {
+        lastScaleCheckMs = now;
+        const float sc = physicalScale();
+        if (std::abs (sc - cacheScale) > 0.01f) rebuildCaches (sc);
+    }
+
+    // chien de garde : un redessin demandé n'arrive pas -> on relance le moteur de rendu et on redessine tout
+    if (repaintAskedMs > 0.0 && isShowing() && now - repaintAskedMs > 1500.0 && lastPaintMs < repaintAskedMs)
+    {
+        repaintAskedMs = 0.0;
+        lastPeer = nullptr;
+        useSoftwareRenderer();
+        repaint();
+    }
 
     // on ne redessine une zone que si ce qu'elle affiche a vraiment changé (zéro travail au repos)
     auto changed = [] (float& drawn, float now) { if (std::abs (drawn - now) < 0.002f) return false; drawn = now; return true; };
@@ -412,27 +476,27 @@ void TexturalAudioProcessorEditor::timerCallback()
 
     for (int i = 0; i < 6; ++i)
         if (changed (drawnKnob[i], knobValue (layer, i)))
-            repaint (pedalZone ({ kKnobs[i].x, kKnobs[i].y }, 72.0f));
+            askRepaint (pedalZone ({ kKnobs[i].x, kKnobs[i].y }, 72.0f));
 
     if (changed (drawnReverse, reverseAmount (layer)))
-        repaint (pedalZone (kReverseBtn, kBtnR * 2.2f));
+        askRepaint (pedalZone (kReverseBtn, kBtnR * 2.2f));
 
     {
         Colour c; float amt;
         modeLedState (layer, c, amt);
         const bool a = changed (drawnMode, amt);
         const bool b = colourChanged (drawnModeColour, c);
-        if (a || b) repaint (pedalZone (kModeBtn, kBtnR * 2.2f));
+        if (a || b) askRepaint (pedalZone (kModeBtn, kBtnR * 2.2f));
     }
 
     if (changed (drawnLed, statusLedAmount (layer)))
-        repaint (pedalZone (kLed, 44.0f));
+        askRepaint (pedalZone (kLed, 44.0f));
 
     const bool pressChanged = pressedHit != drawnPressed;
     if (pressChanged)
     {
-        if (pressedHit == Hit::Footswitch || drawnPressed == Hit::Footswitch) repaint (pedalZone (kFootswitch, kFootswitchR + 4.0f));
-        if (pressedHit == Hit::PresetBtn  || drawnPressed == Hit::PresetBtn)  repaint (pedalZone (kPresetBtn, 18.0f));
+        if (pressedHit == Hit::Footswitch || drawnPressed == Hit::Footswitch) askRepaint (pedalZone (kFootswitch, kFootswitchR + 4.0f));
+        if (pressedHit == Hit::PresetBtn  || drawnPressed == Hit::PresetBtn)  askRepaint (pedalZone (kPresetBtn, 18.0f));
         drawnPressed = pressedHit;
     }
 
@@ -445,7 +509,7 @@ void TexturalAudioProcessorEditor::timerCallback()
             presetLedState (i, cur, modified, c, on);
             const bool a = changed (drawnPresetLed[i], on);
             const bool b = colourChanged (drawnPresetColour[i], c);
-            if (a || b) repaint (pedalZone ({ kPresetLedX[i], kPresetLedY }, kPresetLedR * 2.2f));
+            if (a || b) askRepaint (pedalZone ({ kPresetLedX[i], kPresetLedY }, kPresetLedR * 2.2f));
         }
     }
 
@@ -459,7 +523,7 @@ void TexturalAudioProcessorEditor::timerCallback()
             drawnStatus = txt;
             const auto r = Rectangle<float> (284.0f, 695.0f, 521.0f, 36.0f).expanded (8.0f)
                                .transformedBy (pedalTransform().scaled (scale()));
-            repaint (r.getSmallestIntegerContainer().expanded (2));
+            askRepaint (r.getSmallestIntegerContainer().expanded (2));
         }
     }
 }
@@ -573,15 +637,30 @@ void TexturalAudioProcessorEditor::showMenu()
 //==============================================================================
 void TexturalAudioProcessorEditor::paint (Graphics& g)
 {
+    lastPaintMs = Time::getMillisecondCounterHiRes();
+    repaintAskedMs = 0.0;
     g.fillAll (Colours::black);
-    g.addTransform (AffineTransform::scale (scale()));
 
-    g.setImageResamplingQuality (Graphics::highResamplingQuality);
-    g.setOpacity (1.0f);
-    // black backdrop with a faint echo of the pedal's granular wave pattern
-    g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH), RectanglePlacement::fillDestination);
-    g.addTransform (pedalTransform());          // everything below belongs to the pedal
-    g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kPedalSpaceW - 2.0f * kPedalX, kDesignH));
+    if (bgCache.isValid())
+    {
+        // anti-gel : fond + façade déjà composés à la taille de la fenêtre par le timer (aucun rescale ici)
+        g.setImageResamplingQuality (Graphics::lowResamplingQuality);
+        g.drawImage (bgCache, getLocalBounds().toFloat());
+        g.addTransform (AffineTransform::scale (scale()));
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
+        g.setOpacity (1.0f);
+        g.addTransform (pedalTransform());      // everything below belongs to the pedal
+    }
+    else
+    {
+        g.addTransform (AffineTransform::scale (scale()));
+        g.setImageResamplingQuality (Graphics::highResamplingQuality);
+        g.setOpacity (1.0f);
+        // black backdrop with a faint echo of the pedal's granular wave pattern
+        g.drawImage (backgroundImg, Rectangle<float> (0, 0, kDesignW, kDesignH), RectanglePlacement::fillDestination);
+        g.addTransform (pedalTransform());          // everything below belongs to the pedal
+        g.drawImage (faceplate, Rectangle<float> (kPedalX, 0, kPedalSpaceW - 2.0f * kPedalX, kDesignH));
+    }
 
     const Layer layer = currentLayer();
 
