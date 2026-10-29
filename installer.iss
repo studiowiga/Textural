@@ -1,7 +1,7 @@
 ; Inno Setup script - installs Textural.vst3 into the standard VST3 folder
 [Setup]
 AppName=Textural
-AppVersion=1.1.0
+AppVersion=1.2.0
 AppPublisher=Studio Wiga
 DefaultDirName={commoncf64}\VST3
 DisableDirPage=yes

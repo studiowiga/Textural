@@ -75,6 +75,19 @@ public:
     std::atomic<int>    lastMidiCC { -1 }, lastMidiValue { 0 };
     std::atomic<double> lastMidiTime { 0.0 };
 
+    // MIDI Learn (v1.2) : toutes les commandes (CC fixes d'avant = numéros par défaut, réassignables)
+    // index 0..26 = entrées de ccMap() (même ordre), 27 = tap tempo, 28 = preset suivant
+    static constexpr int kNumLearn = 29, kLearnTap = 27, kLearnNext = 28;
+    static const juce::String& learnId (int i);
+    static const char* learnName (int i);
+    static int learnDefaultCC (int i);
+    static int learnIndexOf (const juce::String& id);
+    int learnIndexForCC (int cc) const;
+    std::atomic<int> ccAssign[kNumLearn];             // numéro de CC de chaque commande, -1 = non assigné
+    std::atomic<int> learnTarget { -1 };              // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };              // dernière commande apprise (lue et remise à -1 par la fenêtre)
+    void resetMidiMap();
+
     // UI
     std::atomic<int> uiHeight { 493 };
     bool isFrozen() const       { return engine.frozen.load(); }
@@ -104,6 +117,8 @@ private:
     std::atomic<float> pendingValue[kMaxQueued];
     std::atomic<bool>  pendingSet[kMaxQueued];
     bool ccIsBool[kMaxQueued] {};
+    int  ccPositions[kMaxQueued] {};                  // paramètre à choix : nombre de positions (CC réparti dessus)
+    int  bypassIndex = -1;
 
     // raw parameter values read by the audio thread (looked up once in the constructor)
     struct Raw

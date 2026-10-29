@@ -42,6 +42,8 @@ La ligne d'état sous « Textural » n'affiche que le réglage du potard en cour
 
 ## MIDI
 
+**MIDI Learn** : clic droit sur une commande (potard dans la couche active : normale, Ctrl, Alt ou Ctrl + Alt ; REVERSE, MODE, footswitch, bouton preset) -> « MIDI Learn », puis bouger la pédale d'expression / appuyer sur le bouton MIDI ; « Clear MIDI » retire l'assignation. Le sous-menu MIDI liste toutes les commandes (dont Freeze et Tap Tempo) et « Reset MIDI to defaults » revient au tableau ci-dessous. Les assignations sont sauvegardées avec le projet.
+
 Program Change 1-8 = emplacements (2 = Live, 0 = Live aussi), 9 = Slow Attack Soundtrack. Dans la liste des presets du DAW : 1 Sea Synth … 8 Stardust Cloud, puis Slow Attack Soundtrack. Tous les paramètres sont aussi automatisables dans le DAW.
 
 | CC | Paramètre | CC | Paramètre |
@@ -108,3 +110,5 @@ Les presets utilisateur sont enregistrés dans le projet du DAW et dans `%APPDAT
 - v1.1.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
 
 - v1.1.1 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
+
+- v1.2.0 : MIDI Learn au clic droit sur chaque commande (Clear MIDI, assignations sauvegardées avec le projet)

@@ -78,7 +78,8 @@ private:
     Hit  hitTest (juce::Point<float> p, int& knobIndex) const;
     Layer currentLayer() const;
     juce::String knobParamID (Layer, int knob) const;
-    void showMenu();
+    void showMenu (int learnIdx = -1);     // learnIdx >= 0 : clic droit sur une commande (MIDI Learn en tête du menu)
+    int  learnIndexAt (const juce::MouseEvent&) const;
     void setHeightKeepingAspect (int h);
     void setParam (const juce::String& id, float normalised);
     void touch (const juce::String& id);
@@ -132,6 +133,7 @@ private:
     juce::String statusParam, statusMsg;
     juce::Colour statusMsgColour;
     double statusMs = 0, lastMidiSeen = 0;
+    bool learnMsgShown = false;          // message « MIDI LEARN: ... » affiché
     juce::String lastTouched;
     double lastTouchedMs = 0;
     double phase = 0;

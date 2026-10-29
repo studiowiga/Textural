@@ -78,8 +78,15 @@ TexturalAudioProcessor::TexturalAudioProcessor()
 
     jassert ((int) ccMap().size() <= kMaxQueued);
     for (int i = 0; i < kMaxQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    jassert ((int) ccMap().size() == kLearnTap);
     for (int i = 0; i < jmin (kMaxQueued, (int) ccMap().size()); ++i)
+    {
         ccIsBool[i] = dynamic_cast<AudioParameterBool*> (apvts.getParameter (*ccMap()[(size_t) i].id)) != nullptr;
+        if (auto* ch = dynamic_cast<AudioParameterChoice*> (apvts.getParameter (*ccMap()[(size_t) i].id)))
+            ccPositions[i] = ch->choices.size();
+        if (*ccMap()[(size_t) i].id == PID::bypass) bypassIndex = i;
+    }
+    resetMidiMap();
 
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<RangedAudioParameter*> (p))
@@ -92,6 +99,56 @@ TexturalAudioProcessor::TexturalAudioProcessor()
     currentPreset = kLivePreset;
     selectPreset (1);                       // the pedal opens on preset 1 (Sea Synth)
     startTimerHz (60);
+}
+
+//==============================================================================
+//  MIDI Learn (v1.2)
+//==============================================================================
+static const char* const kLearnNames[TexturalAudioProcessor::kNumLearn] =
+{
+    "Time", "Size", "Overlap", "Regen", "Pitch", "Mix",
+    "Time Random", "Size Random", "Overlap Random", "Regen Mix", "Pitch Random", "Reverse Random",
+    "Reverb Mix", "Reverb Decay", "Filter", "Quantize", "Vibrato Rate", "Vibrato Depth",
+    "Reverse", "Mode", "Bypass (footswitch)", "Freeze", "Output Gain", "Output Mode",
+    "Trails", "Footswitch Hold Mode", "Preset Scroll Mute",
+    "Tap Tempo", "Next Preset"
+};
+
+const String& TexturalAudioProcessor::learnId (int i)
+{
+    static const String tapId { "tapTempo" }, nextId { "nextPreset" };
+    if (i == kLearnTap)  return tapId;
+    if (i == kLearnNext) return nextId;
+    return *ccMap()[(size_t) jlimit (0, (int) ccMap().size() - 1, i)].id;
+}
+
+const char* TexturalAudioProcessor::learnName (int i) { return kLearnNames[jlimit (0, kNumLearn - 1, i)]; }
+
+int TexturalAudioProcessor::learnDefaultCC (int i)
+{
+    if (i == kLearnTap)  return kCCTap;
+    if (i == kLearnNext) return kCCPresetNext;
+    return ccMap()[(size_t) jlimit (0, (int) ccMap().size() - 1, i)].cc;
+}
+
+int TexturalAudioProcessor::learnIndexOf (const String& id)
+{
+    if (id.isEmpty()) return -1;
+    for (int i = 0; i < kNumLearn; ++i)
+        if (learnId (i) == id) return i;
+    return -1;
+}
+
+int TexturalAudioProcessor::learnIndexForCC (int cc) const
+{
+    for (int i = 0; i < kNumLearn; ++i)
+        if (ccAssign[i].load (std::memory_order_relaxed) == cc) return i;
+    return -1;
+}
+
+void TexturalAudioProcessor::resetMidiMap()
+{
+    for (int i = 0; i < kNumLearn; ++i) ccAssign[i].store (learnDefaultCC (i));
 }
 
 const String TexturalAudioProcessor::getProgramName (int index)
@@ -158,16 +215,29 @@ void TexturalAudioProcessor::handleMidi (const MidiBuffer& midi)
         const int v  = m.getControllerValue();
         lastMidiCC = cc; lastMidiValue = v; lastMidiTime = Time::getMillisecondCounterHiRes();
 
-        if (cc == kCCTap)        { if (v >= 64) tap(); continue; }
-        if (cc == kCCPresetNext) { if (v >= 64) pendingPresetStep.fetch_add (1); continue; }
-
-        const auto& map = ccMap();
-        for (int i = 0; i < jmin (kMaxQueued, (int) map.size()); ++i)
+        // MIDI Learn : le CC reçu est affecté à la commande visée (il n'agit pas sur le son)
+        const int lt = learnTarget.load();
+        if (lt >= 0 && lt < kNumLearn && cc < 120)
         {
-            if (map[(size_t) i].cc != cc) continue;
+            for (int j = 0; j < kNumLearn; ++j)
+                if (j != lt && ccAssign[j].load() == cc) ccAssign[j].store (-1);   // numéro déjà pris : l'autre commande est désassignée
+            ccAssign[lt].store (cc);
+            lastLearned.store (lt);
+            learnTarget.store (-1);
+            continue;
+        }
+
+        for (int i = 0; i < kNumLearn; ++i)
+        {
+            if (ccAssign[i].load (std::memory_order_relaxed) != cc) continue;
+            if (i == kLearnTap)  { if (v >= 64) tap(); continue; }
+            if (i == kLearnNext) { if (v >= 64) pendingPresetStep.fetch_add (1); continue; }
+            if (i >= kMaxQueued) continue;
             float norm = (float) v / 127.0f;
-            if (cc == 82) norm = v >= 64 ? 0.0f : 1.0f;                       // CC82 (bypass) >= 64 = effect ON
+            if (i == bypassIndex) norm = v >= 64 ? 0.0f : 1.0f;              // BYPASS (CC82 par défaut) >= 64 = effect ON
             else if (ccIsBool[i]) norm = v >= 64 ? 1.0f : 0.0f;
+            else if (ccPositions[i] > 1)                                       // sélecteur : CC réparti sur les positions
+                norm = (float) jmin (ccPositions[i] - 1, v * ccPositions[i] / 128) / (float) (ccPositions[i] - 1);
             pendingValue[i].store (norm, std::memory_order_relaxed);
             pendingSet[i].store (true, std::memory_order_release);
         }
@@ -589,6 +659,8 @@ void TexturalAudioProcessor::getStateInformation (MemoryBlock& dest)
     auto state = apvts.copyState();
     state.setProperty ("preset", currentPreset.load(), nullptr);
     state.setProperty ("uiHeight", uiHeight.load(), nullptr);
+    for (int i = 0; i < kNumLearn; ++i)
+        state.setProperty ("cc_" + learnId (i), ccAssign[i].load(), nullptr);
     state.setProperty ("live", snapshotToString (isLive (currentPreset.load()) ? takeSnapshot() : liveSnapshot), nullptr);
     state.setProperty ("loaded", snapshotToString (loadedSnapshot), nullptr);
     for (int i = 0; i < 8; ++i)
@@ -616,6 +688,9 @@ void TexturalAudioProcessor::setStateInformation (const void* data, int size)
     currentPreset  = jlimit (0, kLastPreset, (int) state.getProperty ("preset", kLivePreset));
     if (currentPreset.load() == 0) currentPreset = kLivePreset;
     uiHeight       = jlimit (493, 1479, (int) state.getProperty ("uiHeight", 493));
+    // assignations MIDI Learn (ancien projet sans ces propriétés : CC fixes d'avant)
+    for (int i = 0; i < kNumLearn; ++i)
+        ccAssign[i].store (jlimit (-1, 127, (int) state.getProperty ("cc_" + learnId (i), learnDefaultCC (i))));
     apvts.replaceState (state);
 }
 

@@ -224,10 +224,27 @@ void TexturalAudioProcessorEditor::touch (const String& id)
     if (copyMode && id.isNotEmpty() && id != PID::bypass) copyMode = false;   // altering cancels copy
 }
 
+// commande sous le clic droit : le potard dans la couche active (Ctrl / Alt / verrou), les boutons, le footswitch
+int TexturalAudioProcessorEditor::learnIndexAt (const MouseEvent& e) const
+{
+    int k;
+    switch (hitTest (toDesign (e), k))
+    {
+        case Hit::Knob:       return TexturalAudioProcessor::learnIndexOf (knobParamID (currentLayer(), k));
+        case Hit::ReverseBtn: return TexturalAudioProcessor::learnIndexOf (PID::reverse);
+        case Hit::ModeBtn:    return TexturalAudioProcessor::learnIndexOf (PID::mode);
+        case Hit::Footswitch: return TexturalAudioProcessor::learnIndexOf (PID::bypass);
+        case Hit::PresetBtn:  return TexturalAudioProcessor::kLearnNext;
+        case Hit::Led:
+        case Hit::None:
+        default:              return -1;
+    }
+}
+
 //==============================================================================
 void TexturalAudioProcessorEditor::mouseDown (const MouseEvent& e)
 {
-    if (e.mods.isPopupMenu()) { showMenu(); return; }
+    if (e.mods.isPopupMenu()) { showMenu (learnIndexAt (e)); return; }
 
     int k;
     const auto p = toDesign (e);
@@ -393,12 +410,37 @@ void TexturalAudioProcessorEditor::timerCallback()
     if (mt > lastMidiSeen)
     {
         lastMidiSeen = mt;
-        const int cc = proc.lastMidiCC.load();
-        for (auto& en : ccMap())
-            if (en.cc == cc)
-                for (int l = 0; l < 4; ++l)
-                    for (int k = 0; k < 6; ++k)
-                        if (knobParamID ((Layer) l, k) == *en.id) { statusKnob = k; statusParam = *en.id; statusMs = mt; }
+        const int li = proc.learnIndexForCC (proc.lastMidiCC.load());
+        if (li >= 0 && li < TexturalAudioProcessor::kLearnTap && statusMsg.isEmpty())
+        {
+            const auto& id = TexturalAudioProcessor::learnId (li);
+            for (int l = 0; l < 4; ++l)
+                for (int k = 0; k < 6; ++k)
+                    if (knobParamID ((Layer) l, k) == id) { statusKnob = k; statusParam = id; statusMs = mt; }
+        }
+    }
+
+    // MIDI Learn : attente puis confirmation 2 s dans la ligne d'état
+    {
+        const int learned = proc.lastLearned.exchange (-1);
+        const int lt = proc.learnTarget.load();
+        if (learned >= 0)
+        {
+            showMessage (String (TexturalAudioProcessor::learnName (learned)) + " = CC " + String (proc.ccAssign[learned].load()),
+                         Colour (0xff121212));
+            statusMs += 900.0;                 // message plein 2 s (puis le fondu habituel)
+            learnMsgShown = false;
+        }
+        else if (lt >= 0)
+        {
+            showMessage ("MIDI LEARN: move a control for " + String (TexturalAudioProcessor::learnName (lt)), Colour (0xff121212));
+            learnMsgShown = true;
+        }
+        else if (learnMsgShown)               // learn annulé : le message s'efface
+        {
+            learnMsgShown = false;
+            statusMs = nowMs() - 1100.0;
+        }
     }
     const double held = nowMs() - pressStartMs;
 
@@ -583,10 +625,26 @@ void TexturalAudioProcessorEditor::presetLedState (int i, int cur, bool modified
 }
 
 //==============================================================================
-void TexturalAudioProcessorEditor::showMenu()
+void TexturalAudioProcessorEditor::showMenu (int learnIdx)
 {
     PopupMenu m;
     const int h = getHeight();
+    const int lt = proc.learnTarget.load();
+    auto ccText = [this] (int i)
+    {
+        const int cc = proc.ccAssign[i].load();
+        return cc >= 0 ? "CC " + String (cc) : String ("none");
+    };
+    // clic droit sur une commande : MIDI Learn de cette commande en tête du menu
+    if (learnIdx >= 0)
+    {
+        const String name = TexturalAudioProcessor::learnName (learnIdx);
+        m.addSectionHeader (name);
+        m.addItem (1000 + learnIdx, "MIDI Learn: " + name + " (" + ccText (learnIdx) + ")", true, lt == learnIdx);
+        m.addItem (1100 + learnIdx, "Clear MIDI: " + name, proc.ccAssign[learnIdx].load() >= 0);
+        if (lt >= 0) m.addItem (1200, "Cancel MIDI learn");
+        m.addSeparator();
+    }
     m.addSectionHeader ("Textural (Studio Wiga)");
     m.addItem (1, "60 % (default)", true, h == kDefaultH);
     m.addItem (3, "75 %",  true, h == kH75);
@@ -605,6 +663,17 @@ void TexturalAudioProcessorEditor::showMenu()
     for (int x = TexturalAudioProcessor::kExtraPreset; x <= TexturalAudioProcessor::kLastPreset; ++x)
         m.addItem (23 + x - TexturalAudioProcessor::kExtraPreset, "Load preset: " + proc.presetName (x), true,
                    proc.currentPreset.load() == x);
+    m.addSeparator();
+
+    PopupMenu midi;
+    for (int i = 0; i < TexturalAudioProcessor::kNumLearn; ++i)
+        midi.addItem (1000 + i, "Learn: " + String (TexturalAudioProcessor::learnName (i)) + " (" + ccText (i) + ")", true, lt == i);
+    midi.addSeparator();
+    if (lt >= 0) midi.addItem (1200, "Cancel MIDI learn");
+    midi.addItem (1201, "Reset MIDI to defaults (fixed CC map)");
+    midi.addSeparator();
+    midi.addItem (1202, "Program Change 1-9 = presets", false);
+    m.addSubMenu ("MIDI", midi);
 
     SafePointer<TexturalAudioProcessorEditor> safe (this);
     m.showMenuAsync (PopupMenu::Options().withMousePosition(), [safe] (int r)
@@ -626,7 +695,14 @@ void TexturalAudioProcessorEditor::showMenu()
                 ed.showMessage (ed.proc.presetName (x).toUpperCase(), Colour (0xff121212));
                 break;
             }
-            default: if (r > 10 && r <= 18) ed.proc.savePresetTo (r - 10); break;
+            default:
+                if (r > 10 && r <= 18) ed.proc.savePresetTo (r - 10);
+                else if (r >= 1000 && r < 1000 + TexturalAudioProcessor::kNumLearn)        // re-cliquer annule
+                    ed.proc.learnTarget.store (ed.proc.learnTarget.load() == r - 1000 ? -1 : r - 1000);
+                else if (r >= 1100 && r < 1100 + TexturalAudioProcessor::kNumLearn) ed.proc.ccAssign[r - 1100].store (-1);
+                else if (r == 1200) ed.proc.learnTarget.store (-1);
+                else if (r == 1201) { ed.proc.learnTarget.store (-1); ed.proc.resetMidiMap(); }
+                break;
         }
     });
 }
