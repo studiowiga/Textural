@@ -106,3 +106,5 @@ Les presets utilisateur sont enregistrés dans le projet du DAW et dans `%APPDAT
 ## Versions
 
 - v1.1.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
+
+- v1.1.1 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)

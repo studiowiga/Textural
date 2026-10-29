@@ -588,10 +588,9 @@ void TexturalAudioProcessorEditor::showMenu()
     PopupMenu m;
     const int h = getHeight();
     m.addSectionHeader ("Textural (Studio Wiga)");
-    m.addItem (1, "Default size", true, h == kDefaultH);
-    m.addItem (2, "60%",  true, h == kH60);
-    m.addItem (3, "75%",  true, h == kH75);
-    m.addItem (4, "100%", true, h == kH100);
+    m.addItem (1, "60 % (default)", true, h == kDefaultH);
+    m.addItem (3, "75 %",  true, h == kH75);
+    m.addItem (4, "100 %", true, h == kH100);
     m.addSeparator();
 
     PopupMenu save;
